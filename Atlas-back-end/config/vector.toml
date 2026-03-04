@@ -1,0 +1,233 @@
+# =============================================================================
+# vector.toml — ATLAS Log Ingestion Pipeline
+# =============================================================================
+#
+# This pipeline ships logs from your servers to the ATLAS backend in two ways:
+#
+#   HOT PATH  → POST /api/ingest/http   (real-time, seconds latency)
+#   COLD PATH → S3 bucket archive       (compressed batches, 5-min cadence)
+#
+# Install Vector: https://vector.dev/docs/setup/installation/
+#   curl --proto '=https' --tlsv1.2 -sSf https://sh.vector.dev | bash
+#
+# Run:
+#   vector --config /path/to/vector.toml
+#
+# Required environment variables (set in your shell or a systemd unit file):
+#   ATLAS_INGEST_URL      e.g. http://localhost:8000
+#   ATLAS_API_KEY         the value of INGEST_API_KEY from ATLAS .env
+#   AWS_S3_BUCKET         e.g. atlas-soc-cold-logs
+#   AWS_REGION            e.g. us-east-1
+#
+# =============================================================================
+
+# ── Data Directory ─────────────────────────────────────────────────────────────
+# Vector uses this directory to persist read positions (checkpoints) between
+# restarts. Without it, Vector re-reads files from the beginning on restart.
+data_dir = "/var/lib/vector"
+
+
+# =============================================================================
+# SOURCES — where logs come from
+# =============================================================================
+
+# ── Source 1: Tail live application log files ──────────────────────────────────
+[sources.app_log_files]
+type              = "file"
+include           = [
+  "/var/log/atlas/network/*.log",
+  "/var/log/atlas/api/*.log",
+  "/var/log/atlas/endpoint/*.log",
+  "/var/log/atlas/db/*.log",
+  "/var/log/atlas/incidents/*.log",
+]
+# Vector remembers the last read position; new lines are shipped in real-time.
+read_from         = "beginning"
+# Glob patterns are re-evaluated every 5 seconds (picks up new log files).
+glob_minimum_cooldown_ms = 5000
+# Annotate each event with the source file path for downstream routing.
+include_file_name = true
+include_file_path = true
+
+
+# ── Source 2: Syslog UDP receiver (optional — for network devices / firewalls) ─
+[sources.syslog_udp]
+type    = "syslog"
+mode    = "udp"
+address = "0.0.0.0:514"
+# Network devices (Cisco, Palo Alto, etc.) send syslog here.
+# Events are enriched in the transforms section below.
+
+
+# ── Source 3: HTTP receiver (pull mode from other agents) ─────────────────────
+# Other Vector agents or Fluent Bit instances can forward events here.
+[sources.vector_receiver]
+type    = "vector"
+address = "0.0.0.0:9000"
+version = "2"
+
+
+# =============================================================================
+# TRANSFORMS — enrich and route events
+# =============================================================================
+
+# ── Transform 1: Parse JSON log lines & inject log_type from file path ─────────
+[transforms.enrich_file_logs]
+type   = "remap"
+inputs = ["app_log_files"]
+source = '''
+  # Parse the line as JSON (fails gracefully if not valid JSON)
+  . = parse_json!(.message)
+
+  # Derive log_type from the file path if not already present.
+  # Expected path pattern: /var/log/atlas/{log_type}/...
+  if !exists(.log_type) {
+    path_parts = split(string!(.file), "/")
+    if length(path_parts) >= 5 {
+      .log_type = path_parts[4]   # "network", "api", "endpoint", etc.
+    } else {
+      .log_type = "unknown"
+    }
+  }
+
+  # Add ingestion metadata
+  .ingested_by  = "vector"
+  .ingested_at  = now()
+  .vector_host  = get_hostname!()
+'''
+
+
+# ── Transform 2: Enrich syslog events as network or endpoint logs ──────────────
+[transforms.enrich_syslog]
+type   = "remap"
+inputs = ["syslog_udp"]
+source = '''
+  # Map syslog severity to ATLAS severity levels
+  .severity = if .severity == "emerg" || .severity == "alert" || .severity == "crit" {
+    "Critical"
+  } else if .severity == "err" || .severity == "warning" {
+    "High"
+  } else if .severity == "notice" {
+    "Medium"
+  } else {
+    "Low"
+  }
+
+  # Syslog events from network devices are treated as network logs
+  .log_type  = "network"
+  .env       = "cloud"
+  .source_ip = .hostname
+  .app       = .appname
+  .anomaly_type = .message
+
+  .ingested_by = "vector-syslog"
+  .ingested_at = now()
+'''
+
+
+# ── Transform 3: Add env tag to forwarded Vector events ───────────────────────
+[transforms.enrich_forwarded]
+type   = "remap"
+inputs = ["vector_receiver"]
+source = '''
+  .ingested_by = "vector-forwarded"
+  .ingested_at = now()
+  if !exists(.env) { .env = "cloud" }
+'''
+
+
+# ── Transform 4: Merge all enriched streams ───────────────────────────────────
+# A single merged stream makes it easy to fan-out to multiple sinks below.
+[transforms.all_logs]
+type   = "merge"          # (Vector calls this "reroute" in newer versions)
+inputs = [
+  "enrich_file_logs",
+  "enrich_syslog",
+  "enrich_forwarded",
+]
+
+
+# =============================================================================
+# SINKS — where enriched logs go
+# =============================================================================
+
+# ── Sink 1: HOT PATH — POST /api/ingest/http (real-time) ──────────────────────
+[sinks.atlas_http_ingest]
+type              = "http"
+inputs            = ["all_logs"]
+uri               = "${ATLAS_INGEST_URL}/api/ingest/http"
+method            = "post"
+encoding.codec    = "json"
+
+# Vector batches events for efficiency. A batch is flushed when EITHER
+# the record count OR the time window is exceeded — whichever comes first.
+batch.max_events  = 500         # flush after 500 records
+batch.timeout_secs = 10         # or after 10 seconds, whichever is first
+
+# API key authentication (matches require_ingest_api_key in ATLAS backend)
+[sinks.atlas_http_ingest.request.headers]
+X-Atlas-API-Key   = "${ATLAS_API_KEY}"
+Content-Type      = "application/json"
+
+# Retry failed requests with exponential backoff
+[sinks.atlas_http_ingest.request]
+retry_attempts          = 5
+retry_initial_backoff_secs = 1
+retry_max_duration_secs    = 30
+timeout_secs               = 15
+
+# Healthcheck: Vector verifies the endpoint is reachable before routing events.
+[sinks.atlas_http_ingest.healthcheck]
+enabled = true
+uri     = "${ATLAS_INGEST_URL}/health"
+
+
+# ── Sink 2: COLD PATH — S3 archive (compressed batches for long-term storage) ──
+#
+# Vector writes compressed JSONL archives to S3 every 5 minutes.
+# The ATLAS S3 background task (services/s3_ingestor.py) polls this bucket
+# and ingests any new objects it finds into PostgreSQL.
+#
+# Key pattern written by this sink:
+#   logs/{log_type}/{YYYY}/{MM}/{DD}/{HH}-{mm}-{ss}.jsonl.gz
+#
+# This means the ATLAS S3 ingestor can derive log_type from the key prefix,
+# so per-record log_type fields are just a fallback.
+[sinks.s3_cold_archive]
+type              = "aws_s3"
+inputs            = ["all_logs"]
+bucket            = "${AWS_S3_BUCKET}"
+region            = "${AWS_REGION}"
+key_prefix        = "logs/{{ log_type }}/%Y/%m/%d/"
+compression       = "gzip"
+encoding.codec    = "ndjson"    # newline-delimited JSON = JSONL
+
+# Write a new object every 5 minutes (matches s3_poll_interval_seconds in ATLAS)
+batch.timeout_secs = 300
+
+# Filename includes timestamp so objects sort chronologically
+filename_time_format = "%H-%M-%S"
+filename_extension   = "jsonl.gz"
+
+# S3 storage class — STANDARD_IA reduces cost for infrequently accessed archives
+storage_class = "STANDARD_IA"
+
+# Server-side encryption (recommended for SOC data)
+server_side_encryption = "AES256"
+
+# Optional: tag every object so the ATLAS S3 ingestor can filter by tag
+[sinks.s3_cold_archive.tags]
+source    = "vector"
+log-type  = "atlas-soc"
+
+
+# ── Sink 3: Internal metrics (optional) ───────────────────────────────────────
+# Exposes Vector's own metrics on :9598/metrics for Prometheus scraping.
+# Useful for monitoring Vector's throughput and error rates.
+[sinks.prometheus_metrics]
+type    = "prometheus_exporter"
+inputs  = ["internal_metrics"]
+address = "0.0.0.0:9598"
+
+[sources.internal_metrics]
+type = "internal_metrics"

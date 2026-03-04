@@ -1,0 +1,6 @@
+{"env":"cloud","alert_id":"alert-1","app":"Payment Gateway","message":"High number of failed transactions from IP 192.168.1.100.","severity":"High","timestamp_label":"2m ago"}
+{"env":"cloud","alert_id":"alert-2","app":"Auth-Service","message":"Potential credential stuffing attack detected.","severity":"Critical","timestamp_label":"5m ago"}
+{"env":"cloud","alert_id":"alert-3","app":"Shipping API","message":"API latency has breached the 500ms threshold.","severity":"Medium","timestamp_label":"15m ago"}
+{"env":"local","alert_id":"alert-loc-1","app":"Fileserver Alpha","message":"Anomalous access to sensitive project files by user 'j.doe'.","severity":"High","timestamp_label":"3m ago"}
+{"env":"local","alert_id":"alert-loc-2","app":"Domain Controller","message":"Multiple failed login attempts for administrator account.","severity":"Critical","timestamp_label":"8m ago"}
+{"env":"local","alert_id":"alert-loc-3","app":"HR-DB","message":"Unauthorized access attempt from workstation WKST-1088.","severity":"Medium","timestamp_label":"25m ago"}

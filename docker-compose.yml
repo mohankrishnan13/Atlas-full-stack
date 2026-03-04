@@ -1,0 +1,166 @@
+version: "3.9"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ATLAS SOC Dashboard — Unified Docker Compose
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# FOLDER STRUCTURE EXPECTED:
+#
+#   Atlas-full-stack/                        ← run docker compose from HERE
+#   ├── docker-compose.yml              ← this file
+#   ├── Atlas-back-end/       ← backend source (extracted from zip)
+#   │   ├── app/
+#   │   ├── data/logs/
+#   │   ├── Dockerfile
+#   │   └── requirements.txt
+#   └── Atlas-front-end/             ← frontend source (extracted from zip)
+#       ├── src/
+#       ├── package.json
+#       └── Dockerfile
+#
+# USAGE:
+#   docker compose up --build           # first time (or after code changes)
+#   docker compose up -d                # subsequent starts (detached)
+#   docker compose logs -f              # stream all logs
+#   docker compose logs -f atlas-frontend atlas-backend  # specific services
+#   docker compose down                 # stop (keep volumes)
+#   docker compose down -v              # stop and wipe the database
+#
+# SERVICES:
+#   postgres         → internal only, port 5432 not exposed to host
+#   atlas-backend    → http://localhost:8000  (FastAPI + Swagger at /docs)
+#   atlas-frontend   → http://localhost:3000  (Next.js dashboard)
+#
+# DEFAULT LOGIN CREDENTIALS (printed in backend logs on first boot):
+#   admin@atlas.local   /  AtlasAdmin1!   (Admin)
+#   analyst@atlas.local /  Analyst123!    (Analyst)
+#   audit@firm.com      /  ReadOnly123!   (Read-Only)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── PostgreSQL 16 ────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: atlas-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # Not exposed to the host — only reachable by services on the atlas-network.
+    # To connect with a GUI like pgAdmin or TablePlus:
+    #   change the ports block to:  ports: - "5432:5432"
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - atlas-network
+
+  # ── ATLAS FastAPI Backend ─────────────────────────────────────────────────────
+  atlas-backend:
+    build:
+      context: ./Atlas-back-end
+      dockerfile: Dockerfile
+    container_name: atlas-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"     # FastAPI + Swagger UI at http://localhost:8000/docs
+    env_file:
+      - .env
+    environment:
+      # ── Database ───────────────────────────────────────────────────────────
+      # Uses the service name "postgres" — Docker DNS resolves this automatically.
+      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL_SYNC: ${DATABASE_URL_SYNC}
+      DB_POOL_SIZE: ${DB_POOL_SIZE}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW}
+      DB_ECHO_SQL: ${DB_ECHO_SQL}
+
+      # ── Application ────────────────────────────────────────────────────────
+      APP_ENV: ${APP_ENV}
+      DEBUG: ${DEBUG}
+      LOG_DATA_DIR: ${LOG_DATA_DIR}
+      REINGEST_ON_STARTUP: ${REINGEST_ON_STARTUP}
+
+      # ── Auth / Security ────────────────────────────────────────────────────
+      # IMPORTANT: Replace these in production with strong random values.
+      # Generate: python -c "import secrets; print(secrets.token_hex(32))"
+      SECRET_KEY: ${SECRET_KEY}
+      ALGORITHM: ${ALGORITHM}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
+
+      # ── HTTP Ingest (Vector / Fluent Bit) ─────────────────────────────────
+      # Generate: python -c "import secrets; print(secrets.token_urlsafe(48))"
+      INGEST_API_KEY: ${INGEST_API_KEY}
+      INGEST_API_KEY_HEADER: ${INGEST_API_KEY_HEADER}
+
+      # ── Velociraptor webhook ────────────────────────────────────────────────
+      VELOCIRAPTOR_WEBHOOK_SECRET: ${VELOCIRAPTOR_WEBHOOK_SECRET}
+
+      # ── S3 Cold Storage (disabled by default) ─────────────────────────────
+      S3_ENABLED: ${S3_ENABLED}
+      AWS_REGION: ${AWS_REGION}
+      S3_LOG_BUCKET: ${S3_LOG_BUCKET}
+      S3_LOG_PREFIX: ${S3_LOG_PREFIX}
+      S3_POLL_INTERVAL_SECONDS: ${S3_POLL_INTERVAL_SECONDS}
+
+    volumes:
+      # Log files are read-only from the host so you can edit sample data
+      # without rebuilding the container.
+      - ./Atlas-back-end/data/logs:/app/data/logs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - atlas-network
+
+  # ── ATLAS Next.js Frontend ────────────────────────────────────────────────────
+  atlas-frontend:
+    build:
+      context: ./Atlas-front-end
+      dockerfile: Dockerfile
+      args:
+        # This value is baked into the Next.js build at compile time.
+        # It MUST be the URL that the user's BROWSER can reach the backend at.
+        # Because both services map port 8000 to localhost, this is always:
+        NEXT_PUBLIC_ATLAS_BACKEND_URL: http://localhost:8000
+    container_name: atlas-frontend
+    restart: unless-stopped
+    depends_on:
+      atlas-backend:
+        condition: service_healthy
+    ports:
+      - "3000:3000"     # Next.js dashboard at http://localhost:3000
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      # Runtime env (for server components / server actions — not used for
+      # apiFetch which runs in the browser, but good practice to set anyway)
+      NEXT_PUBLIC_ATLAS_BACKEND_URL: http://localhost:8000
+    networks:
+      - atlas-network
+
+# ── Persistent volumes ───────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
+
+# ── Internal network ─────────────────────────────────────────────────────────
+networks:
+  atlas-network:
+    driver: bridge

@@ -1,0 +1,96 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 224 71% 4%; /* slate-950 */
+    --foreground: 210 40% 98%;
+
+    --card: 222 47% 11%; /* slate-900 */
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 11%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 217.2 91.2% 59.8%; /* blue-500 */
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 222 33% 23%; /* slate-700 */
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 222 33% 23%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 222 33% 23%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 4 90% 58%; /* red-500 */
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 222 33% 23%;
+    --input: 222 33% 14%;
+    --ring: 217.2 91.2% 59.8%;
+
+    --radius: 0.5rem;
+    
+    --chart-1: 217.2 91.2% 59.8%;
+    --chart-2: 36 100% 50%;
+    --chart-3: 122 39% 49%;
+    --chart-4: 56 99% 61%;
+    --chart-5: 4 90% 58%;
+
+    --sidebar-background: 222 33% 17%;
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 217.2 91.2% 59.8%;
+    --sidebar-primary-foreground: 210 40% 98%;
+    --sidebar-accent: 222 33% 23%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 222 33% 23%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 224 71% 4%;
+    --foreground: 210 40% 98%;
+    --card: 222 47% 11%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222 47% 11%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 217.2 91.2% 59.8%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 222 33% 23%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 222 33% 23%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 222 33% 23%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 4 90% 58%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 222 33% 23%;
+    --input: 222 33% 14%;
+    --ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@keyframes pulse-red {
+  0%, 100% {
+    box-shadow: 0 0 0 0 hsl(var(--destructive) / 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px hsl(var(--destructive) / 0);
+  }
+}
+
+.pulse-red {
+  animation: pulse-red 2s infinite;
+}
