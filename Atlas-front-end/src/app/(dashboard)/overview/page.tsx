@@ -15,7 +15,7 @@ import {
   ChartContainer,
   ChartTooltipContent,
 } from "@/components/ui/chart";
-import { BarChart as RechartsBarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from "recharts";
+import { BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from "recharts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -147,13 +147,13 @@ function ApiRequestsByAppChart({ data, isLoading }: { data?: ApiRequestsByApp[];
         ) : (
           <ChartContainer config={apiRequestsByAppChartConfig} className="h-full w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <RechartsBarChart data={data} margin={{ top: 5, right: 20, left: -10, bottom: 5 }} layout="vertical" barCategoryGap="12%">
+              <BarChart data={data} margin={{ top: 5, right: 20, left: -10, bottom: 5 }} layout="vertical" barCategoryGap="12%">
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="hsl(var(--border) / 0.5)" />
                 <XAxis type="number" tick={{ fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} fontSize={12} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
                 <YAxis type="category" dataKey="app" width={100} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }} tickLine={false} axisLine={false} />
                 <RechartsTooltip content={<ChartTooltipContent hideLabel />} cursor={{ fill: "hsl(var(--muted))" }} />
                 <Bar dataKey="requests" fill="var(--color-requests)" radius={[0, 4, 4, 0]} name="Requests" />
-              </RechartsBarChart>
+              </BarChart>
             </ResponsiveContainer>
           </ChartContainer>
         )}
