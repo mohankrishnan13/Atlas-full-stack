@@ -164,7 +164,7 @@ export default function NetworkTrafficPage() {
             <div className="flex flex-col gap-2 w-1/3 border-r pr-4">
               <h3 className="text-lg font-semibold">External Attackers</h3>
               {externalIps.map((ip) => (
-                <div key={ip} className="flex items-center justify-between bg-gray-100 p-2 rounded-md">
+                <div key={ip} className="flex items-center justify-between p-2 rounded-md">
                   <span>{ip}</span>
                   <Button
                     variant="destructive"
