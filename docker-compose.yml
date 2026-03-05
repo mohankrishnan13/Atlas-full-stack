@@ -30,9 +30,9 @@
 #   atlas-frontend   → http://localhost:3000  (Next.js dashboard)
 #
 # DEFAULT LOGIN CREDENTIALS (printed in backend logs on first boot):
-#   admin@atlas.local   /  AtlasAdmin1!   (Admin)
-#   analyst@atlas.local /  Analyst123!    (Analyst)
-#   audit@firm.com      /  ReadOnly123!   (Read-Only)
+#   admin@atlas.com   /  AtlasAdmin1!   (Admin)
+#   analyst@atlas.com /  Analyst123!    (Analyst)
+#   audit@atlas.com   /  ReadOnly123!   (Read-Only)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 services:

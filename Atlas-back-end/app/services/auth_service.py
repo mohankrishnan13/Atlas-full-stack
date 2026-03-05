@@ -158,7 +158,7 @@ async def seed_default_admin() -> None:
     Creates the default admin user on first startup if no users exist.
 
     Credentials:
-      Email:    admin@atlas.local
+      Email:    admin@atlas.com
       Password: AtlasAdmin1!
 
     IMPORTANT: Change these credentials immediately in production.
@@ -173,21 +173,21 @@ async def seed_default_admin() -> None:
         logger = logging.getLogger(__name__)
 
         admin = AtlasUser(
-            email="admin@atlas.local",
+            email="admin@atlas.com",
             hashed_password=hash_password("AtlasAdmin1!"),
             name="ATLAS Administrator",
             role="Admin",
             is_active=True,
         )
         analyst = AtlasUser(
-            email="analyst@atlas.local",
+            email="analyst@atlas.com",
             hashed_password=hash_password("Analyst123!"),
             name="Jane Doe",
             role="Analyst",
             is_active=True,
         )
         readonly = AtlasUser(
-            email="audit@firm.com",
+            email="audit@atlas.com",
             hashed_password=hash_password("ReadOnly123!"),
             name="Auditor External",
             role="Read-Only",
@@ -201,7 +201,7 @@ async def seed_default_admin() -> None:
             "\n"
             "╔══════════════════════════════════════════════════════════════╗\n"
             "║         ATLAS — DEFAULT ADMIN ACCOUNT CREATED                ║\n"
-            "║  Email:    admin@atlas.local                                 ║\n"
+            "║  Email:    admin@atlas.com                                   ║\n"
             "║  Password: AtlasAdmin1!                                      ║\n"
             "║  CHANGE THIS IMMEDIATELY IN PRODUCTION!                      ║\n"
             "╚══════════════════════════════════════════════════════════════╝"

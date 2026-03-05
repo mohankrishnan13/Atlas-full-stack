@@ -141,8 +141,8 @@ Three accounts are created automatically on first boot:
 
 | Email                  | Password       | Role      | Access Level                     |
 |------------------------|----------------|-----------|----------------------------------|
-| `admin@atlas.local`    | `AtlasAdmin1!` | Admin     | Full access + user management    |
-| `analyst@atlas.local`  | `Analyst123!`  | Analyst   | Read + quarantine + remediation  |
+| `admin@atlas.com`    | `AtlasAdmin1!` | Admin     | Full access + user management    |
+| `analyst@atlas.com`  | `Analyst123!`  | Analyst   | Read + quarantine + remediation  |
 | `audit@firm.com`       | `ReadOnly123!` | Read-Only | View dashboards only             |
 
 > ⚠️ **Change these passwords immediately** after first login in any shared or production environment.

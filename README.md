@@ -328,9 +328,9 @@ Every login attempt (success or failure) is written to the `user_sessions` table
 
 | Email | Password | Role |
 |---|---|---|
-| `admin@atlas.local` | `AtlasAdmin1!` | Admin |
-| `analyst@atlas.local` | `Analyst123!` | Analyst |
-| `audit@firm.com` | `ReadOnly123!` | Read-Only |
+| `admin@atlas.com` | `AtlasAdmin1!` | Admin |
+| `analyst@atlas.com` | `Analyst123!` | Analyst |
+| `audit@atlas.com` | `ReadOnly123!` | Read-Only |
 
 ### 5.4 Log Ingestion Engine
 
@@ -584,9 +584,9 @@ Three accounts are seeded automatically on first boot. The seed runs only once �
 
 | Email | Password | Role | What They Can Do |
 |---|---|---|---|
-| `admin@atlas.local` | `AtlasAdmin1!` | Admin | Everything — including adding/removing users and editing system settings |
-| `analyst@atlas.local` | `Analyst123!` | Analyst | All dashboards, quarantine devices, remediate incidents |
-| `audit@firm.com` | `ReadOnly123!` | Read-Only | View all dashboards, no write or action buttons |
+| `admin@atlas.com` | `AtlasAdmin1!` | Admin | Everything — including adding/removing users and editing system settings |
+| `analyst@atlas.com` | `Analyst123!` | Analyst | All dashboards, quarantine devices, remediate incidents |
+| `audit@atlas.com` | `ReadOnly123!` | Read-Only | View all dashboards, no write or action buttons |
 
 > ⚠️ Change all default passwords immediately after first login in any environment that is not strictly local development.
 
