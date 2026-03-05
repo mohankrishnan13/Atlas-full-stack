@@ -1,172 +1,257 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { ArrowDown, ArrowUp, DollarSign, Gauge, Ban, BarChart3, LoaderCircle, ShieldBan } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { ChartContainer, ChartTooltipContent } from "@/components/ui/chart";
-import { BarChart as RechartsBarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, Legend } from "recharts";
-import { Skeleton } from "@/components/ui/skeleton";
-import type { ApiMonitoringData, ApiRoute } from "@/lib/types";
-import { useToast } from "@/hooks/use-toast";
-import { useEnvironment } from "@/context/EnvironmentContext";
-import { apiGet, apiPost, ApiError } from "@/lib/api";
-
-const consumptionChartConfig = {
-  actual: { label: "Actual", color: "hsl(var(--primary))" },
-  limit: { label: "Limit", color: "hsl(var(--muted-foreground))" },
-};
-
-function StatCard({ title, value, icon: Icon, isLoading }: { title: string, value?: string | number, icon: React.ElementType, isLoading: boolean }) {
-    return (
-        <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">{title}</CardTitle>
-                <Icon className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-                {isLoading ? <Skeleton className="h-8 w-24" /> : <div className="text-2xl font-bold">{value}</div>}
-            </CardContent>
-        </Card>
-    )
+import React, { useEffect, useState } from "react";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "../../../components/ui/card";
+import { Button } from "../../../components/ui/button";
+import { apiGet, apiPost, ApiError } from "../../../lib/api";
+import {
+  ApiMonitoringData,
+  ApiBlockRouteRequest,
+  ApiConsumptionByApp,
+  ApiRoute,
+} from "../../../lib/types";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend,
 }
+from "recharts";
+import {
+  Table, 
+  TableBody, 
+  TableCell, 
+  TableHead, 
+  TableHeader, 
+  TableRow
+} from "../../../components/ui/table";
+import { useToast } from "../../../hooks/use-toast";
+import { Alert, AlertDescription, AlertTitle } from "../../../components/ui/alert";
+import { Terminal } from "lucide-react";
 
 export default function ApiMonitoringPage() {
-  const [data, setData] = useState<ApiMonitoringData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [blockingRouteId, setBlockingRouteId] = useState<number | null>(null);
+  const [apiMonitoringData, setApiMonitoringData] = useState<ApiMonitoringData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
-  const { environment } = useEnvironment();
 
   useEffect(() => {
-    let cancelled = false;
-    setIsLoading(true);
-    apiGet<ApiMonitoringData>(`/api-monitoring?env=${environment}`)
-      .then((result) => { if (!cancelled) setData(result); })
-      .catch((err: ApiError) => {
-        if (!cancelled) {
-          toast({ variant: "destructive", title: "Failed to Load API Monitoring Data", description: err.message });
-          setData(null);
+    const fetchApiMonitoringData = async () => {
+      try {
+        setLoading(true);
+        const data = await apiGet<ApiMonitoringData>("/api-monitoring?env=cloud"); // Assuming 'cloud' for now
+        setApiMonitoringData(data);
+      } catch (err) {
+        if (err instanceof ApiError) {
+          setError(err.message);
+        } else {
+          setError("An unexpected error occurred.");
         }
-      })
-      .finally(() => { if (!cancelled) setIsLoading(false); });
-    return () => { cancelled = true; };
-  }, [toast, environment]);
+        console.error("Failed to fetch API monitoring data:", err);
+        toast({
+          title: "Error",
+          description: `Failed to load API monitoring data: ${error}`,
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchApiMonitoringData();
+  }, [error, toast]);
 
-  const handleApplyHardBlock = async (route: ApiRoute) => {
-    setBlockingRouteId(route.id);
+  const handleBlockRoute = async (app: string, path: string) => {
     try {
-      await apiPost<{ success: boolean; message: string }>("/api-monitoring/block-route", { app: route.app, path: route.path });
-      toast({ title: "Hard Block Applied", description: `Route ${route.app} ${route.path} has been blocked.` });
-    } catch (err: unknown) {
-      toast({ variant: "destructive", title: "Block Failed", description: err instanceof Error ? err.message : "Apply hard block failed." });
-    } finally {
-      setBlockingRouteId(null);
+      const payload: ApiBlockRouteRequest = { app, path };
+      await apiPost("/api-monitoring/block-route", payload);
+      toast({
+        title: "API Block Action",
+        description: `Successfully initiated hard block for ${app} on route ${path}.`,
+      });
+      // Optionally refetch data to reflect changes
+      // await fetchApiMonitoringData();
+    } catch (err) {
+      if (err instanceof ApiError) {
+        toast({
+          title: "Error",
+          description: `Failed to block route: ${err.message}`,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Error",
+          description: "An unexpected error occurred during route blocking.",
+          variant: "destructive",
+        });
+      }
+      console.error("Route blocking failed:", err);
     }
   };
 
+  if (loading) {
+    return <div className="p-4">Loading API monitoring data...</div>;
+  }
+
+  if (error) {
+    return (
+      <Alert variant="destructive" className="m-4">
+        <Terminal className="h-4 w-4" />
+        <AlertTitle>Error</AlertTitle>
+        <AlertDescription>{error}</AlertDescription>
+      </Alert>
+    );
+  }
+
+  if (!apiMonitoringData) {
+    return <div className="p-4">No API monitoring data available.</div>;
+  }
+
+  const topAbusedEndpoints = apiMonitoringData.apiRouting
+    .sort((a, b) => b.cost - a.cost) // Assuming higher cost indicates more abuse
+    .slice(0, 10); // Take top 10
+
+  const activeMitigationFeed = apiMonitoringData.apiRouting.filter(
+    (route) => route.action !== "OK"
+  );
+
   return (
-    <div className="space-y-8">
+    <div className="flex flex-col gap-4 p-4">
       <h1 className="text-3xl font-bold">API Monitoring</h1>
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <StatCard title="API Calls Today" value={data?.apiCallsToday?.toLocaleString()} icon={BarChart3} isLoading={isLoading} />
-        <StatCard title="Blocked Requests" value={data?.blockedRequests?.toLocaleString()} icon={Ban} isLoading={isLoading} />
-        <StatCard title="Average Latency" value={data ? `${data.avgLatency}ms` : undefined} icon={Gauge} isLoading={isLoading} />
-        <StatCard title="Estimated 3rd-Party API Cost" value={data ? `$${data.estimatedCost.toFixed(2)}` : undefined} icon={DollarSign} isLoading={isLoading} />
+
+      {/* Top Row Charts */}
+      <div className="grid gap-4 md:grid-cols-1 lg:grid-cols-2">
+        {/* Top Left Chart: API Overuse by Target Application */}
+        <Card>
+          <CardHeader>
+            <CardTitle>API Overuse by Target Application</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={350}>
+              <BarChart data={apiMonitoringData.apiConsumptionByApp}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="app" />
+                <YAxis label={{ value: "RPM", angle: -90, position: "insideLeft" }} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="actual" fill="#8884d8" name="Actual RPM" />
+                <Bar dataKey="limit" fill="#82ca9d" name="Hard Limit" />
+              </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        {/* Top Right Chart: Most Abused Endpoints */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Most Abused Endpoints (by Cost)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={350}>
+              <BarChart
+                data={topAbusedEndpoints.map((e) => ({ ...e, name: `[${e.app}] ${e.path}` }))}
+                layout="vertical"
+              >
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis type="number" label={{ value: "Cost", angle: 0, position: "insideBottom" }} />
+                <YAxis type="category" dataKey="name" width={150} />
+                <Tooltip />
+                <Bar dataKey="cost" fill="#ef4444" />
+              </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
       </div>
 
+      {/* Top Consumers Table */}
       <Card>
         <CardHeader>
-          <CardTitle>API Consumption by Application (Current vs Limit)</CardTitle>
-        </CardHeader>
-        <CardContent className="h-[400px]">
-          {isLoading ? (
-            <div className="h-full w-full flex items-center justify-center"><Skeleton className="h-full w-full" /></div>
-          ) : !data?.apiConsumptionByApp?.length ? (
-            <div className="h-full flex items-center justify-center text-muted-foreground">No consumption data by app.</div>
-          ) : (
-            <ChartContainer config={consumptionChartConfig} className="h-full w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <RechartsBarChart data={data.apiConsumptionByApp} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border) / 0.5)" />
-                  <XAxis dataKey="app" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }} tickLine={false} axisLine={false} />
-                  <YAxis tick={{ fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-                  <RechartsTooltip content={<ChartTooltipContent hideLabel />} cursor={{ fill: "hsl(var(--muted))" }} />
-                  <Legend />
-                  <Bar dataKey="actual" name="Actual" fill="var(--color-actual)" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="limit" name="Limit" fill="var(--color-limit)" radius={[4, 4, 0, 0]} />
-                </RechartsBarChart>
-              </ResponsiveContainer>
-            </ChartContainer>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>API Routing & Abuse (by Application)</CardTitle>
+          <CardTitle>Top Consumers (Limited Data Available)</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Note: Backend currently does not provide 'Consumer IP/User' directly. Displaying app and path instead.
+          </p>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Application / Endpoint</TableHead>
-                <TableHead>Method</TableHead>
-                <TableHead>Cost/Call</TableHead>
-                <TableHead>Trend (7d)</TableHead>
-                <TableHead>Action Taken</TableHead>
-                <TableHead className="text-right">Mitigation</TableHead>
+                <TableHead>Target App</TableHead>
+                <TableHead>Endpoint Path</TableHead>
+                <TableHead>Cost</TableHead>
+                <TableHead className="text-right">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading && Array.from({ length: 5 }).map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={6}><Skeleton className="h-6 w-full" /></TableCell></TableRow>
-              ))}
-              {!isLoading && data?.apiRouting.map((route) => (
-                <TableRow key={route.id}>
-                  <TableCell className="font-medium">
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="font-mono text-xs bg-secondary">{route.app}</Badge>
-                      <span className="font-mono">{route.path}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell><Badge variant="secondary">{route.method}</Badge></TableCell>
-                  <TableCell>${route.cost.toFixed(4)}</TableCell>
-                  <TableCell>
-                    <div className={cn("flex items-center", route.trend > 0 ? "text-red-500" : "text-emerald-500")}>
-                      {route.trend > 0 ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />}
-                      {Math.abs(route.trend)}%
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Badge
-                      className={cn(
-                        route.action === "Blocked" && "bg-red-500/20 text-red-400 border-red-500/30",
-                        route.action === "Rate-Limited" && "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
-                      )}
-                      variant="outline"
-                    >
-                      {route.action}
-                    </Badge>
-                  </TableCell>
+              {apiMonitoringData.apiRouting.map((route) => (
+                <TableRow key={`${route.app}-${route.path}`}>
+                  <TableCell className="font-medium">{route.app}</TableCell>
+                  <TableCell>{route.path}</TableCell>
+                  <TableCell>{route.cost.toFixed(2)}</TableCell>
                   <TableCell className="text-right">
                     <Button
                       variant="destructive"
                       size="sm"
-                      disabled={blockingRouteId === route.id}
-                      onClick={() => handleApplyHardBlock(route)}
+                      onClick={() => handleBlockRoute(route.app, route.path)}
                     >
-                      {blockingRouteId === route.id ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <ShieldBan className="mr-2 h-4 w-4" />}
-                      {blockingRouteId === route.id ? "Applying..." : "Apply Hard Block"}
+                      Revoke Key / Block
                     </Button>
                   </TableCell>
                 </TableRow>
               ))}
-              {!isLoading && (!data || data.apiRouting.length === 0) && (
-                <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">No API routing data available.</TableCell></TableRow>
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {/* Active API Mitigation Feed */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Active API Mitigation Feed</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Target App</TableHead>
+                <TableHead>Endpoint Path</TableHead>
+                <TableHead>Method</TableHead>
+                <TableHead>Current Action</TableHead>
+                <TableHead className="text-right">Mitigation Action</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {activeMitigationFeed.length > 0 ? (
+                activeMitigationFeed.map((route) => (
+                  <TableRow key={`${route.app}-${route.path}-mitigation`}>
+                    <TableCell className="font-medium">{route.app}</TableCell>
+                    <TableCell>{route.path}</TableCell>
+                    <TableCell>{route.method}</TableCell>
+                    <TableCell>{route.action}</TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => handleBlockRoute(route.app, route.path)}
+                      >
+                        Enforce Hard Block
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center">
+                    No active API mitigations.
+                  </TableCell>
+                </TableRow>
               )}
             </TableBody>
           </Table>
