@@ -20,11 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.schemas import (
+    ApiBlockRouteRequest,
     ApiMonitoringData,
     DbMonitoringData,
+    DbKillQueryRequest,
     EndpointSecurityData,
     HeaderData,
     Incident,
+    NetworkBlockRequest,
     NetworkTrafficData,
     OverviewData,
     QuarantineRequest,
@@ -82,10 +85,27 @@ async def get_api_monitoring(
 ) -> ApiMonitoringData:
     """
     Powers the API Monitoring page.
-    Returns call volumes, latency, cost metrics, and per-route abuse table.
+    Returns call volumes, latency, cost metrics, apiConsumptionByApp, and per-route abuse table.
     """
     env = _validate_env(env)
     return await query_service.get_api_monitoring(env, db)
+
+
+@router.post(
+    "/api-monitoring/block-route",
+    summary="Apply hard block on an API route (app + path)",
+)
+async def block_api_route(payload: ApiBlockRouteRequest) -> dict:
+    """
+    MVP: Logs the block. Production: call API gateway/WAF to block the route for the app.
+    """
+    logger.info(
+        f"[API BLOCK] Hard block requested for app={payload.app} path={payload.path}"
+    )
+    return {
+        "success": True,
+        "message": f"Hard block applied for route {payload.app} {payload.path}.",
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,6 +123,23 @@ async def get_network_traffic(
     """
     env = _validate_env(env)
     return await query_service.get_network_traffic(env, db)
+
+
+@router.post(
+    "/network-traffic/block",
+    summary="Apply hard block on source IP / app (mitigation action)",
+)
+async def block_network_source(payload: NetworkBlockRequest) -> dict:
+    """
+    MVP: Logs the block action. Production: call firewall/WAF API to block the IP for the given app.
+    """
+    logger.info(
+        f"[NETWORK BLOCK] Hard block requested for sourceIp={payload.sourceIp} app={payload.app}"
+    )
+    return {
+        "success": True,
+        "message": f"Hard block applied for source {payload.sourceIp} (app: {payload.app}).",
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -163,10 +200,27 @@ async def get_db_monitoring(
     """
     Powers the Database Monitoring page.
     Returns connection counts, query latency, export volume,
-    hourly operations chart, and suspicious activity table.
+    operations-by-app and DLP-by-app bar data, and suspicious activity table.
     """
     env = _validate_env(env)
     return await query_service.get_db_monitoring(env, db)
+
+
+@router.post(
+    "/db-monitoring/kill-query",
+    summary="Kill a suspicious query (mitigation action)",
+)
+async def kill_db_query(payload: DbKillQueryRequest) -> dict:
+    """
+    MVP: Logs the kill-query action. Production: call DB proxy/admin API to terminate the session/query.
+    """
+    logger.info(
+        f"[DB KILL QUERY] activityId={payload.activityId} app={payload.app} user={payload.user}"
+    )
+    return {
+        "success": True,
+        "message": f"Kill-query command sent for activity {payload.activityId} (app: {payload.app}).",
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────

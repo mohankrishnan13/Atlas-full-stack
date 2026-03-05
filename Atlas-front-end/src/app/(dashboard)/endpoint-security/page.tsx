@@ -1,24 +1,21 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Laptop, WifiOff, ShieldAlert, ShieldX } from "lucide-react";
+import { Laptop, WifiOff, ShieldAlert, ShieldX, LoaderCircle } from "lucide-react";
 import { cn, getSeverityClassNames } from "@/lib/utils";
-import type { Severity, EndpointSecurityData, OsDistribution, AlertTypeDistribution } from "@/lib/types";
-import {
-  ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
-} from "@/components/ui/chart"
-import { Pie, PieChart, Cell, ResponsiveContainer, Legend, Tooltip as RechartsTooltip } from "recharts"
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { useToast } from '@/hooks/use-toast';
-import { Skeleton } from '@/components/ui/skeleton';
-import { useEnvironment } from '@/context/EnvironmentContext';
-import { apiFetch } from '@/lib/api';
+import type { Severity, EndpointSecurityData, OsDistribution, AlertTypeDistribution, WazuhEvent } from "@/lib/types";
+import { ChartContainer, ChartTooltipContent } from "@/components/ui/chart";
+import { Pie, PieChart, Cell, ResponsiveContainer, Legend, Tooltip as RechartsTooltip } from "recharts";
+import { BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer as BarResponsive } from "recharts";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { useToast } from "@/hooks/use-toast";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useEnvironment } from "@/context/EnvironmentContext";
+import { apiGet, apiPost, ApiError } from "@/lib/api";
 
 function StatCard({ title, value, icon: Icon, isLoading }: { title: string, value?: string | number, icon: React.ElementType, isLoading: boolean }) {
     return (
@@ -60,90 +57,102 @@ function OsDistributionChart({ data, isLoading }: { data?: OsDistribution[], isL
     )
 }
 
-function AlertTypesChart({ data, isLoading }: { data?: AlertTypeDistribution[], isLoading: boolean }) {
-    return (
-        <Card>
-            <CardHeader>
-                <CardTitle>Alert Types</CardTitle>
-            </CardHeader>
-            <CardContent className="h-[300px]">
-                {isLoading ? <Skeleton className="h-full w-full" /> :
-                <ChartContainer config={{}} className="h-full w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                            <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={80}>
-                                 {data?.map((entry, index) => (
-                                    <Cell key={`cell-${index}`} fill={entry.fill} />
-                                ))}
-                            </Pie>
-                            <RechartsTooltip content={<ChartTooltipContent hideLabel />} />
-                            <Legend />
-                        </PieChart>
-                    </ResponsiveContainer>
-                </ChartContainer>}
-            </CardContent>
-        </Card>
-    )
+function AlertTypesChart({ data, isLoading }: { data?: AlertTypeDistribution[]; isLoading: boolean }) {
+  return (
+    <Card>
+      <CardHeader><CardTitle>Alert Types</CardTitle></CardHeader>
+      <CardContent className="h-[300px]">
+        {isLoading ? <Skeleton className="h-full w-full" /> : (
+          <ChartContainer config={{}} className="h-full w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={80}>
+                  {data?.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.fill} />)}
+                </Pie>
+                <RechartsTooltip content={<ChartTooltipContent hideLabel />} />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          </ChartContainer>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const hostnameChartConfig = { count: { label: "Alerts", color: "hsl(var(--chart-3))" } };
+
+/** Categorical bar chart: vulnerabilities/alerts by endpoint hostname (workstation ID). */
+function AlertsByHostnameChart({ events, isLoading }: { events?: WazuhEvent[]; isLoading: boolean }) {
+  const byHost = useMemo(() => {
+    if (!events?.length) return [];
+    const map = new Map<string, number>();
+    events.forEach((e) => map.set(e.workstationId, (map.get(e.workstationId) ?? 0) + 1));
+    return Array.from(map.entries()).map(([workstationId, count]) => ({ workstationId, count })).sort((a, b) => b.count - a.count).slice(0, 12);
+  }, [events]);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Vulnerabilities / Alerts by Endpoint Hostname</CardTitle>
+      </CardHeader>
+      <CardContent className="h-[300px]">
+        {isLoading ? <Skeleton className="h-full w-full" /> : !byHost.length ? (
+          <div className="h-full flex items-center justify-center text-muted-foreground">No endpoint alert data.</div>
+        ) : (
+          <ChartContainer config={hostnameChartConfig} className="h-full w-full">
+            <BarResponsive width="100%" height="100%">
+              <BarChart data={byHost} margin={{ top: 5, right: 20, left: -10, bottom: 5 }} layout="vertical" barCategoryGap="12%">
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="hsl(var(--border) / 0.5)" />
+                <XAxis type="number" tick={{ fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} />
+                <YAxis type="category" dataKey="workstationId" width={120} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }} tickLine={false} axisLine={false} />
+                <Tooltip content={<ChartTooltipContent hideLabel />} cursor={{ fill: "hsl(var(--muted))" }} />
+                <Bar dataKey="count" fill="var(--color-count)" radius={[0, 4, 4, 0]} name="Alerts" />
+              </BarChart>
+            </BarResponsive>
+          </ChartContainer>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function EndpointSecurityPage() {
-    const { toast } = useToast();
-    const [data, setData] = useState<EndpointSecurityData | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const { environment } = useEnvironment();
+  const { toast } = useToast();
+  const [data, setData] = useState<EndpointSecurityData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [quarantiningId, setQuarantiningId] = useState<string | null>(null);
+  const { environment } = useEnvironment();
 
-    useEffect(() => {
-        const fetchData = async () => {
-            setIsLoading(true);
-            try {
-                const response = await apiFetch(`/endpoint-security?env=${environment}`);
-                if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({ message: 'An unknown API error occurred.' }));
-                    throw new Error(errorData.details || errorData.message || `API call failed with status: ${response.status}`);
-                }
-                const result = await response.json();
-                setData(result);
-            } catch (error: any) {
-                console.error("Failed to fetch endpoint security data:", error);
-                toast({
-                    variant: "destructive",
-                    title: "Failed to Load Endpoint Security Data",
-                    description: error.message,
-                });
-                setData(null);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        fetchData();
-    }, [toast, environment]);
-
-    const handleQuarantine = async (workstationId: string) => {
-        try {
-            const response = await apiFetch('/endpoint-security/quarantine', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ workstationId }),
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ message: 'Quarantine command failed' }));
-                throw new Error(errorData.details || errorData.message);
-            }
-            
-            toast({
-                title: "Quarantine Action",
-                description: `Device ${workstationId} has been sent to quarantine.`,
-            });
-        } catch (error: any) {
-            console.error('Quarantine failed:', error);
-             toast({
-                title: "Error",
-                description: error.message || `Failed to quarantine device ${workstationId}.`,
-                variant: 'destructive',
-            });
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true);
+    apiGet<EndpointSecurityData>(`/endpoint-security?env=${environment}`)
+      .then((result) => { if (!cancelled) setData(result); })
+      .catch((err: ApiError) => {
+        if (!cancelled) {
+          toast({ variant: "destructive", title: "Failed to Load Endpoint Security Data", description: err.message });
+          setData(null);
         }
+      })
+      .finally(() => { if (!cancelled) setIsLoading(false); });
+    return () => { cancelled = true; };
+  }, [toast, environment]);
+
+  const handleQuarantine = async (workstationId: string) => {
+    setQuarantiningId(workstationId);
+    try {
+      await apiPost<{ success: boolean; message: string }>("/endpoint-security/quarantine", { workstationId });
+      toast({ title: "Quarantine Action", description: `Device ${workstationId} has been quarantined.` });
+    } catch (err: unknown) {
+      toast({
+        variant: "destructive",
+        title: "Quarantine Failed",
+        description: err instanceof Error ? err.message : `Failed to quarantine device ${workstationId}.`,
+      });
+    } finally {
+      setQuarantiningId(null);
     }
+  };
 
     return (
         <div className="space-y-8">
@@ -159,9 +168,11 @@ export default function EndpointSecurityPage() {
                 <AlertTypesChart data={data?.alertTypes} isLoading={isLoading} />
             </div>
 
+            <AlertsByHostnameChart events={data?.wazuhEvents} isLoading={isLoading} />
+
             <Card>
                 <CardHeader>
-                    <CardTitle>Wazuh Agent Event Log</CardTitle>
+                    <CardTitle>Wazuh / Velociraptor Agent Event Log (by Workstation)</CardTitle>
                 </CardHeader>
                 <CardContent>
                     <Table>
@@ -201,13 +212,14 @@ export default function EndpointSecurityPage() {
                                         </Badge>
                                     </TableCell>
                                     <TableCell className="text-right">
-                                        <Button 
-                                            variant="destructive" 
+                                        <Button
+                                            variant="destructive"
                                             size="sm"
+                                            disabled={quarantiningId === event.workstationId}
                                             onClick={() => handleQuarantine(event.workstationId)}
                                         >
-                                            <ShieldX className="mr-2 h-4 w-4" />
-                                            Quarantine Device
+                                            {quarantiningId === event.workstationId ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <ShieldX className="mr-2 h-4 w-4" />}
+                                            {quarantiningId === event.workstationId ? "Quarantining..." : "Quarantine Device"}
                                         </Button>
                                     </TableCell>
                                 </TableRow>

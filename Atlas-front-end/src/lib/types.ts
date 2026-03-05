@@ -54,6 +54,11 @@ export type SystemAnomaly = {
     timestamp: string;
 };
 
+export type ApiRequestsByApp = {
+    app: string;
+    requests: number;
+};
+
 export type OverviewData = {
     apiRequests: number;
     errorRate: number;
@@ -62,7 +67,7 @@ export type OverviewData = {
     appAnomalies: AppAnomaly[];
     microservices: Microservice[];
     failingEndpoints: Record<string, string>;
-    apiRequestsChart: TimeSeriesData[];
+    apiRequestsByApp: ApiRequestsByApp[];
     systemAnomalies: SystemAnomaly[];
 };
 
@@ -78,12 +83,18 @@ export type ApiRoute = {
     action: string;
 };
 
+export type ApiConsumptionByApp = {
+    app: string;
+    actual: number;
+    limit: number;
+};
+
 export type ApiMonitoringData = {
     apiCallsToday: number;
     blockedRequests: number;
     avgLatency: number;
     estimatedCost: number;
-    apiUsageChart: TimeSeriesData[];
+    apiConsumptionByApp: ApiConsumptionByApp[];
     apiRouting: ApiRoute[];
 };
 
@@ -145,11 +156,25 @@ export type SuspiciousActivity = {
     reason: string;
 };
 
+export type OperationsByApp = {
+    app: string;
+    SELECT: number;
+    INSERT: number;
+    UPDATE: number;
+    DELETE: number;
+};
+
+export type DlpByTargetApp = {
+    app: string;
+    count: number;
+};
+
 export type DbMonitoringData = {
     activeConnections: number;
     avgQueryLatency: number;
     dataExportVolume: number;
-    operationsChart: TimeSeriesData[];
+    operationsByApp: OperationsByApp[];
+    dlpByTargetApp: DlpByTargetApp[];
     suspiciousActivity: SuspiciousActivity[];
 };
 
@@ -171,6 +196,6 @@ export type TeamUser = {
   id: number;
   name: string;
   email: string;
-  role: "Admin" | "Analyst";
+  role: "Admin" | "Analyst" | "Read-Only";
   avatar: string;
 };
