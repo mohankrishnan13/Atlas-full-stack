@@ -4,19 +4,18 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Bug, LineChart, Server, Waves, LoaderCircle } from "lucide-react";
+import { Bug, BarChart3, Server, Waves, LoaderCircle } from "lucide-react";
 import { cn, getSeverityClassNames } from "@/lib/utils";
-import type { Severity, OverviewData, Microservice, SystemAnomaly, TimeSeriesData, AppAnomaly } from "@/lib/types";
+import type { Severity, OverviewData, Microservice, SystemAnomaly, AppAnomaly, ApiRequestsByApp } from "@/lib/types";
 import { useEnvironment } from "@/context/EnvironmentContext";
-import { apiFetch } from "@/lib/api";
+import { apiGet, ApiError } from "@/lib/api";
 import { generateDailyThreatBriefing } from "@/ai/flows/ai-daily-threat-briefing-flow";
 
 import {
   ChartContainer,
-  ChartTooltip,
   ChartTooltipContent,
-} from "@/components/ui/chart"
-import { Line, LineChart as RechartsLineChart, CartesianGrid, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from "recharts"
+} from "@/components/ui/chart";
+import { BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from "recharts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -129,44 +128,46 @@ function MicroservicesTopology({ services, failingEndpoints, isLoading }: { serv
     );
 }
 
-const apiChartConfig = {
+const apiRequestsByAppChartConfig = {
   requests: { label: "API Requests", color: "hsl(var(--primary))" },
+};
+
+/** Categorical bar chart: X = target_app, Y = requests (NO time-series). */
+function ApiRequestsByAppChart({ data, isLoading }: { data?: ApiRequestsByApp[]; isLoading: boolean }) {
+  return (
+    <Card className="col-span-1 md:col-span-2 xl:col-span-2">
+      <CardHeader>
+        <CardTitle>API Requests by Application</CardTitle>
+      </CardHeader>
+      <CardContent className="h-[300px]">
+        {isLoading ? (
+          <div className="h-full flex items-center justify-center"><Skeleton className="h-full w-full" /></div>
+        ) : !data || data.length === 0 ? (
+          <div className="h-full flex items-center justify-center text-muted-foreground">No API request data by app.</div>
+        ) : (
+          <ChartContainer config={apiRequestsByAppChartConfig} className="h-full w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={data} margin={{ top: 5, right: 20, left: -10, bottom: 5 }} layout="vertical" barCategoryGap="12%">
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="hsl(var(--border) / 0.5)" />
+                <XAxis type="number" tick={{ fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} fontSize={12} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                <YAxis type="category" dataKey="app" width={100} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }} tickLine={false} axisLine={false} />
+                <RechartsTooltip content={<ChartTooltipContent hideLabel />} cursor={{ fill: "hsl(var(--muted))" }} />
+                <Bar dataKey="requests" fill="var(--color-requests)" radius={[0, 4, 4, 0]} name="Requests" />
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartContainer>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
-function ApiRequestsChart({ data, isLoading }: { data?: TimeSeriesData[], isLoading: boolean }) {
-    return (
-        <Card className="col-span-1 md:col-span-2 xl:col-span-2">
-            <CardHeader>
-                <CardTitle>API Requests Over Time</CardTitle>
-            </CardHeader>
-            <CardContent className="h-[300px]">
-                {isLoading ? <div className="h-full flex items-center justify-center"><Skeleton className="h-full w-full" /></div> :
-                !data || data.length === 0 ? <div className="h-full flex items-center justify-center text-muted-foreground">No API request data.</div> :
-                <ChartContainer config={apiChartConfig} className="h-full w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                        <RechartsLineChart data={data} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border) / 0.5)" />
-                            <XAxis dataKey="name" tick={{ fill: 'hsl(var(--muted-foreground))' }} tickLine={false} axisLine={false} fontSize={12} />
-                            <YAxis tick={{ fill: 'hsl(var(--muted-foreground))' }} tickLine={false} axisLine={false} fontSize={12} tickFormatter={(value) => `${value / 1000}k`} />
-                            <RechartsTooltip 
-                                content={<ChartTooltipContent />} 
-                                cursor={{ stroke: 'hsl(var(--border))', strokeWidth: 2, strokeDasharray: '3 3' }}
-                            />
-                            <Line type="monotone" dataKey="requests" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
-                        </RechartsLineChart>
-                    </ResponsiveContainer>
-                </ChartContainer>}
-            </CardContent>
-        </Card>
-    )
-}
-
-function SystemAnomaliesTable({ anomalies, isLoading }: { anomalies?: SystemAnomaly[], isLoading: boolean }) {
-    return (
-        <Card className="col-span-1 md:col-span-2 xl:col-span-3">
-            <CardHeader>
-                <CardTitle>Recent System-Wide Anomalies</CardTitle>
-            </CardHeader>
+function SystemAnomaliesTable({ anomalies, isLoading }: { anomalies?: SystemAnomaly[]; isLoading: boolean }) {
+  return (
+    <Card className="col-span-1 md:col-span-2 xl:col-span-3">
+      <CardHeader>
+        <CardTitle>Recent System Anomalies (by Service / Target App)</CardTitle>
+      </CardHeader>
             <CardContent>
                 <Table>
                     <TableHeader>
@@ -247,36 +248,27 @@ function AppAnomaliesChart({ data, isLoading }: { data?: AppAnomaly[], isLoading
 
 
 export default function OverviewPage() {
-    const [data, setData] = useState<OverviewData | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const { toast } = useToast();
-    const { environment } = useEnvironment();
+  const [data, setData] = useState<OverviewData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const { toast } = useToast();
+  const { environment } = useEnvironment();
 
-    useEffect(() => {
-        const fetchData = async () => {
-            setIsLoading(true);
-            try {
-                const response = await apiFetch(`/overview?env=${environment}`);
-                if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({ message: 'An unknown API error occurred.' }));
-                    throw new Error(errorData.details || errorData.message || `API call failed with status: ${response.status}`);
-                }
-                const result = await response.json();
-                setData(result);
-            } catch (error: any) {
-                console.error("Failed to fetch overview data:", error);
-                toast({
-                    variant: "destructive",
-                    title: "Failed to Load Overview Data",
-                    description: error.message,
-                });
-                setData(null);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        fetchData();
-    }, [toast, environment]);
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true);
+    apiGet<OverviewData>(`/overview?env=${environment}`)
+      .then((result) => {
+        if (!cancelled) setData(result);
+      })
+      .catch((err: ApiError) => {
+        if (!cancelled) {
+          toast({ variant: "destructive", title: "Failed to Load Overview Data", description: err.message });
+          setData(null);
+        }
+      })
+      .finally(() => { if (!cancelled) setIsLoading(false); });
+    return () => { cancelled = true; };
+  }, [toast, environment]);
 
     return (
         <div className="space-y-8">
@@ -284,7 +276,7 @@ export default function OverviewPage() {
                 <AiDailyBriefing data={data} isLoading={isLoading} environment={environment} />
             </div>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                <StatCard title="Total API Requests" value={data?.apiRequests?.toLocaleString()} icon={LineChart} isLoading={isLoading} />
+                <StatCard title="Total API Requests" value={data?.apiRequests?.toLocaleString()} icon={BarChart3} isLoading={isLoading} />
                 <StatCard title="Error Rate" value={data ? `${data.errorRate}%` : undefined} icon={Waves} isLoading={isLoading} />
                 <StatCard title="Active Alerts" value={data?.activeAlerts} icon={Bug} isLoading={isLoading} />
                 <StatCard title="Cost Risk Meter" value={data ? `${data.costRisk}/10` : undefined} icon={Server} isLoading={isLoading} />
@@ -295,7 +287,7 @@ export default function OverviewPage() {
             </div>
             <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
                  <SystemAnomaliesTable anomalies={data?.systemAnomalies} isLoading={isLoading} />
-                 <ApiRequestsChart data={data?.apiRequestsChart} isLoading={isLoading} />
+                 <ApiRequestsByAppChart data={data?.apiRequestsByApp} isLoading={isLoading} />
             </div>
         </div>
     )

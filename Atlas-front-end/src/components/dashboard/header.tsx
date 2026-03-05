@@ -3,13 +3,8 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import {
-  Bell,
-  LogOut,
-  Settings,
-  ShieldCheck,
-  User,
-} from 'lucide-react';
+import { Bell, LogOut, ShieldCheck, User } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
 import {
   Select,
   SelectContent,
@@ -40,7 +35,7 @@ import type { RecentAlert, User as UserType, Application } from '@/lib/types';
 import { Skeleton } from '../ui/skeleton';
 import { useToast } from '@/hooks/use-toast';
 import { useEnvironment } from '@/context/EnvironmentContext';
-import { apiFetch } from '@/lib/api';
+import { apiGet } from '@/lib/api';
 
 function AlertItem({ alert }: { alert: RecentAlert }) {
   const severityClasses = getSeverityClassNames(alert.severity);
@@ -77,38 +72,22 @@ export function DashboardHeader() {
   const [isLoading, setIsLoading] = useState(true);
   const { toast } = useToast();
   const { environment, setEnvironment } = useEnvironment();
+  const { user: authUser } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
-    async function fetchData() {
-      setIsLoading(true);
-      try {
-        const res = await apiFetch(`/header-data?env=${environment}`);
-        if (!res.ok) {
-          const errorData = await res
-            .json()
-            .catch(() => ({ message: 'An unknown API error occurred.' }));
-          throw new Error(
-            errorData.details ||
-              errorData.message ||
-              `API call failed with status: ${res.status}`
-          );
+    let cancelled = false;
+    setIsLoading(true);
+    apiGet<HeaderData>(`/header-data?env=${environment}`)
+      .then((result) => { if (!cancelled) setData(result); })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          toast({ variant: 'destructive', title: 'Failed to Load Header Data', description: err instanceof Error ? err.message : 'Request failed.' });
+          setData(null);
         }
-        const result = await res.json();
-        setData(result);
-      } catch (error: any) {
-        console.error('Failed to fetch header data', error);
-        toast({
-          variant: 'destructive',
-          title: 'Failed to Load Header Data',
-          description: error.message,
-        });
-        setData(null);
-      } finally {
-        setIsLoading(false);
-      }
-    }
-    fetchData();
+      })
+      .finally(() => { if (!cancelled) setIsLoading(false); });
+    return () => { cancelled = true; };
   }, [toast, environment]);
 
   const handleLogout = () => {
@@ -191,27 +170,28 @@ export function DashboardHeader() {
         {/* Vertical Divider */}
         <div className="h-6 w-px bg-slate-800"></div>
 
-        {/* User Profile Dropdown */}
+        {/* User Profile Dropdown — prefer Auth context (logged-in user) over header-data */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
               className="relative h-10 w-10 rounded-full"
             >
-              {isLoading || !data?.user ? (
+              {!authUser && (isLoading || !data?.user) ? (
                 <Skeleton className="h-10 w-10 rounded-full" />
               ) : (
                 <Avatar className="h-10 w-10">
                   <AvatarImage
-                    src={data.user.avatar}
-                    alt={data.user.name}
+                    src={authUser?.avatar ?? data?.user?.avatar ?? ''}
+                    alt={authUser?.name ?? data?.user?.name}
                     data-ai-hint="person face"
                   />
                   <AvatarFallback>
-                    {data.user.name
+                    {(authUser?.name ?? data?.user?.name ?? 'U')
                       .split(' ')
                       .map((n) => n[0])
-                      .join('')}
+                      .join('')
+                      .toUpperCase()}
                   </AvatarFallback>
                 </Avatar>
               )}
@@ -221,10 +201,10 @@ export function DashboardHeader() {
             <DropdownMenuLabel className="font-normal">
               <div className="flex flex-col space-y-1">
                 <p className="text-sm font-medium leading-none">
-                  {data?.user?.name || 'User'}
+                  {authUser?.name ?? data?.user?.name ?? 'User'}
                 </p>
                 <p className="text-xs leading-none text-muted-foreground">
-                  {data?.user?.email || 'email@example.com'}
+                  {authUser?.email ?? data?.user?.email ?? ''}
                 </p>
               </div>
             </DropdownMenuLabel>
@@ -235,12 +215,6 @@ export function DashboardHeader() {
                 <span>Profile</span>
               </Link>
             </DropdownMenuItem>
-            {/* <DropdownMenuItem asChild>
-              <Link href="/settings">
-                <Settings className="mr-2 h-4 w-4" />
-                <span>Settings</span>
-              </Link>
-            </DropdownMenuItem> */}
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onClick={handleLogout}

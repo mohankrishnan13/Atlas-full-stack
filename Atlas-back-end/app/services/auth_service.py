@@ -166,7 +166,7 @@ async def seed_default_admin() -> None:
     """
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(AtlasUser))
-        if result.scalar_one_or_none() is not None:
+        if result.scalars().first() is not None:
             return   # Users already exist, skip seeding
 
         import logging

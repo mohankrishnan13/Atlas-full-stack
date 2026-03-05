@@ -31,17 +31,21 @@ from app.models.db_models import (
 )
 from app.models.schemas import (
     AlertTypeDistribution,
+    ApiConsumptionByApp,
     ApiMonitoringData,
+    ApiRequestsByApp,
     ApiRoute,
     AppAnomaly,
     Application,
     DbMonitoringData,
+    DlpByTargetApp,
     EndpointSecurityData,
     HeaderData,
     Incident as IncidentSchema,
     Microservice,
     NetworkAnomaly,
     NetworkTrafficData,
+    OperationsByApp,
     OsDistribution,
     OverviewData,
     RecentAlert,
@@ -177,19 +181,17 @@ async def get_overview(env: str, db: AsyncSession) -> OverviewData:
         for name, count in list(app_anomaly_map.items())[:5]
     ]
 
-    # ── API requests chart from api_logs hourly buckets ───────────────────────
+    # ── API requests BY APP (categorical bar chart — NO time-series) ─────────────
     result = await db.execute(
-        select(ApiLog.hour_label, func.sum(ApiLog.actual_calls).label("requests"))
+        select(ApiLog.app, func.sum(ApiLog.actual_calls).label("requests"))
         .where(ApiLog.env == env)
-        .group_by(ApiLog.hour_label)
-        .order_by(ApiLog.hour_label)
+        .group_by(ApiLog.app)
+        .order_by(func.sum(ApiLog.actual_calls).desc())
+        .limit(12)
     )
-    chart_rows = result.all()
-    chart_order = ["12am", "3am", "6am", "9am", "12pm", "3pm", "6pm", "9pm"]
-    chart_lookup = {r[0]: int(r[1]) for r in chart_rows}
-    api_requests_chart = [
-        {"name": label, "requests": chart_lookup.get(label, 0)}
-        for label in chart_order
+    api_requests_by_app = [
+        ApiRequestsByApp(app=row[0], requests=int(row[1]))
+        for row in result.all()
     ]
 
     # ── System anomalies from incidents ──────────────────────────────────────
@@ -223,7 +225,7 @@ async def get_overview(env: str, db: AsyncSession) -> OverviewData:
         appAnomalies=app_anomalies,
         microservices=microservices,
         failingEndpoints=failing_endpoints,
-        apiRequestsChart=api_requests_chart,
+        apiRequestsByApp=api_requests_by_app,
         systemAnomalies=system_anomalies,
     )
 
@@ -245,7 +247,7 @@ async def get_api_monitoring(env: str, db: AsyncSession) -> ApiMonitoringData:
     if not all_logs:
         return ApiMonitoringData(
             apiCallsToday=0, blockedRequests=0, avgLatency=0,
-            estimatedCost=0, apiUsageChart=[], apiRouting=[],
+            estimatedCost=0, apiConsumptionByApp=[], apiRouting=[],
         )
 
     # ── KPI stats (take from the first row — same for all rows of same env) ───
@@ -255,19 +257,20 @@ async def get_api_monitoring(env: str, db: AsyncSession) -> ApiMonitoringData:
     avg_latency = first.avg_latency_ms
     estimated_cost = first.estimated_cost
 
-    # ── Hourly usage chart ────────────────────────────────────────────────────
-    chart_order = ["12am", "3am", "6am", "9am", "12pm", "3pm", "6pm", "9pm"]
-    chart_lookup: Dict[str, Dict[str, int]] = {}
+    # ── API consumption BY APP (categorical bar chart — NO time-series) ───────
+    app_actual: Dict[str, int] = defaultdict(int)
+    app_predicted: Dict[str, int] = defaultdict(int)
     for log in all_logs:
-        if log.hour_label not in chart_lookup:
-            chart_lookup[log.hour_label] = {
-                "actual": log.actual_calls,
-                "predicted": log.predicted_calls,
-            }
-    api_usage_chart = [
-        {"name": label, "actual": chart_lookup.get(label, {}).get("actual", 0),
-         "predicted": chart_lookup.get(label, {}).get("predicted", 0)}
-        for label in chart_order
+        app_actual[log.app] += log.actual_calls
+        app_predicted[log.app] += log.predicted_calls
+    # Use max(actual*1.2, predicted) as "limit" for bar comparison
+    api_consumption_by_app = [
+        ApiConsumptionByApp(
+            app=app,
+            actual=actual,
+            limit=max(int(actual * 1.2), app_predicted.get(app, 0)) or 1,
+        )
+        for app, actual in sorted(app_actual.items(), key=lambda x: -x[1])[:12]
     ]
 
     # ── API routing table (deduplicated by app+path) ──────────────────────────
@@ -295,7 +298,7 @@ async def get_api_monitoring(env: str, db: AsyncSession) -> ApiMonitoringData:
         blockedRequests=blocked_requests,
         avgLatency=avg_latency,
         estimatedCost=estimated_cost,
-        apiUsageChart=api_usage_chart,
+        apiConsumptionByApp=api_consumption_by_app,
         apiRouting=api_routing,
     )
 
@@ -428,7 +431,7 @@ async def get_db_monitoring(env: str, db: AsyncSession) -> DbMonitoringData:
     if not logs:
         return DbMonitoringData(
             activeConnections=0, avgQueryLatency=0, dataExportVolume=0,
-            operationsChart=[], suspiciousActivity=[],
+            operationsByApp=[], dlpByTargetApp=[], suspiciousActivity=[],
         )
 
     # ── KPI stats from a representative row ───────────────────────────────────
@@ -437,23 +440,35 @@ async def get_db_monitoring(env: str, db: AsyncSession) -> DbMonitoringData:
     avg_latency = first.avg_latency_ms
     export_volume = first.data_export_volume_tb
 
-    # ── Operations chart — group by hour_label ────────────────────────────────
-    chart_order = ["12am", "3am", "6am", "9am", "12pm", "3pm", "6pm", "9pm"]
-    chart_data: Dict[str, Dict[str, int]] = {}
+    # ── Operations BY APP (categorical bar chart — NO time-series) ─────────────
+    app_ops: Dict[str, Dict[str, int]] = defaultdict(lambda: {"SELECT": 0, "INSERT": 0, "UPDATE": 0, "DELETE": 0})
     for log in logs:
-        chart_data[log.hour_label] = {
-            "SELECT": log.select_count,
-            "INSERT": log.insert_count,
-            "UPDATE": log.update_count,
-            "DELETE": log.delete_count,
-        }
-    operations_chart = [
-        {"name": label, **chart_data.get(label, {"SELECT": 0, "INSERT": 0, "UPDATE": 0, "DELETE": 0})}
-        for label in chart_order
+        app_ops[log.app]["SELECT"] += log.select_count
+        app_ops[log.app]["INSERT"] += log.insert_count
+        app_ops[log.app]["UPDATE"] += log.update_count
+        app_ops[log.app]["DELETE"] += log.delete_count
+    operations_by_app = [
+        OperationsByApp(
+            app=app,
+            SELECT=data["SELECT"],
+            INSERT=data["INSERT"],
+            UPDATE=data["UPDATE"],
+            DELETE=data["DELETE"],
+        )
+        for app, data in sorted(app_ops.items(), key=lambda x: -(x[1]["SELECT"] + x[1]["INSERT"] + x[1]["UPDATE"] + x[1]["DELETE"]))[:12]
+    ]
+
+    # ── DLP / Suspicious BY TARGET APP (categorical bar chart) ────────────────
+    suspicious_logs_list = [l for l in logs if l.is_suspicious]
+    app_dlp: Dict[str, int] = defaultdict(int)
+    for log in suspicious_logs_list:
+        app_dlp[log.app] += 1
+    dlp_by_target_app = [
+        DlpByTargetApp(app=app, count=count)
+        for app, count in sorted(app_dlp.items(), key=lambda x: -x[1])
     ]
 
     # ── Suspicious Activity table ─────────────────────────────────────────────
-    suspicious_logs = [l for l in logs if l.is_suspicious]
     suspicious_activity = [
         SuspiciousActivity(
             id=i + 1,
@@ -463,14 +478,15 @@ async def get_db_monitoring(env: str, db: AsyncSession) -> DbMonitoringData:
             table=log.target_table,
             reason=log.reason,
         )
-        for i, log in enumerate(suspicious_logs)
+        for i, log in enumerate(suspicious_logs_list)
     ]
 
     return DbMonitoringData(
         activeConnections=active_connections,
         avgQueryLatency=avg_latency,
         dataExportVolume=export_volume,
-        operationsChart=operations_chart,
+        operationsByApp=operations_by_app,
+        dlpByTargetApp=dlp_by_target_app,
         suspiciousActivity=suspicious_activity,
     )
 
