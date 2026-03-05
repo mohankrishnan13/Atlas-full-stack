@@ -10,7 +10,10 @@ from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings
+import os
+from dotenv import load_dotenv
 
+load_dotenv()  # Load .env file into environment variables at startup
 
 class Settings(BaseSettings):
     # ── Application ───────────────────────────────────────────────────────────
@@ -20,10 +23,10 @@ class Settings(BaseSettings):
 
     # ── PostgreSQL ────────────────────────────────────────────────────────────
     # Format: postgresql+asyncpg://user:password@host:port/dbname
-    database_url: str = "postgresql+asyncpg://atlas:atlas_secret@localhost:5432/atlas_soc"
+    database_url: str = os.environ.get("DATABASE_URL")
 
     # Synchronous URL is used only by Alembic migrations — never in async handlers
-    database_url_sync: str = "postgresql+psycopg2://atlas:atlas_secret@localhost:5432/atlas_soc"
+    database_url_sync: str = os.environ.get("DATABASE_URL_SYNC")
 
     # SQLAlchemy connection pool tuning
     db_pool_size: int = 10
