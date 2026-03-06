@@ -59,6 +59,12 @@ class SystemAnomaly(BaseModel):
     timestamp: str
 
 
+class ApiRequestsByApp(BaseModel):
+    """Categorical: application name -> request count (for bar charts)."""
+    app: str
+    requests: int
+
+
 class OverviewData(BaseModel):
     apiRequests: int
     errorRate: float
@@ -67,7 +73,7 @@ class OverviewData(BaseModel):
     appAnomalies: List[AppAnomaly]
     microservices: List[Microservice]
     failingEndpoints: Dict[str, str]
-    apiRequestsChart: List[Dict[str, Any]]   # [{ name: "12am", requests: 2000 }]
+    apiRequestsByApp: List[ApiRequestsByApp]   # Bar chart: X = app, Y = requests (NO time-series)
     systemAnomalies: List[SystemAnomaly]
 
 
@@ -85,12 +91,25 @@ class ApiRoute(BaseModel):
     action: str   # "OK" | "Rate-Limited" | "Blocked"
 
 
+class ApiBlockRouteRequest(BaseModel):
+    """Request to apply hard block on an API route (app + path)."""
+    app: str
+    path: str
+
+
+class ApiConsumptionByApp(BaseModel):
+    """Categorical: app -> actual load vs limit (for bar charts)."""
+    app: str
+    actual: int
+    limit: int  # or predicted/hard limit
+
+
 class ApiMonitoringData(BaseModel):
     apiCallsToday: int
     blockedRequests: int
     avgLatency: float
     estimatedCost: float
-    apiUsageChart: List[Dict[str, Any]]   # [{ name, actual, predicted }]
+    apiConsumptionByApp: List[ApiConsumptionByApp]   # Bar chart: X = app, Y = actual/limit (NO time-series)
     apiRouting: List[ApiRoute]
 
 
@@ -161,11 +180,27 @@ class SuspiciousActivity(BaseModel):
     reason: str
 
 
+class OperationsByApp(BaseModel):
+    """Categorical: target app/database -> operation counts (for bar charts)."""
+    app: str
+    SELECT: int = 0
+    INSERT: int = 0
+    UPDATE: int = 0
+    DELETE: int = 0
+
+
+class DlpByTargetApp(BaseModel):
+    """Categorical: target app -> suspicious/DLP count (for bar charts)."""
+    app: str
+    count: int
+
+
 class DbMonitoringData(BaseModel):
     activeConnections: int
     avgQueryLatency: float
     dataExportVolume: float
-    operationsChart: List[Dict[str, Any]]   # [{ name, SELECT, INSERT, UPDATE, DELETE }]
+    operationsByApp: List[OperationsByApp]   # Bar chart: X = app, Y = ops (NO time-series)
+    dlpByTargetApp: List[DlpByTargetApp]     # Bar chart: X = app, Y = count
     suspiciousActivity: List[SuspiciousActivity]
 
 
@@ -203,6 +238,7 @@ class Application(BaseModel):
 
 
 class User(BaseModel):
+    """Used by the HeaderData for the top-right profile dropdown."""
     name: str
     email: str
     avatar: str
@@ -219,11 +255,14 @@ class HeaderData(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TeamUser(BaseModel):
+    """Used by the Settings -> User Access page."""
     id: int
     name: str
     email: str
     role: str          # "Admin" | "Analyst"
     avatar: str
+    is_active: bool
+    invite_pending: bool
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -247,6 +286,19 @@ class RemediateRequest(BaseModel):
 class RemediateResponse(BaseModel):
     success: bool
     message: str
+
+
+class NetworkBlockRequest(BaseModel):
+    """Request to apply hard block on a source IP / app (network anomalies table)."""
+    sourceIp: str
+    app: str
+
+
+class DbKillQueryRequest(BaseModel):
+    """Request to kill a suspicious query (DLP table)."""
+    activityId: int
+    app: str
+    user: str
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -14,69 +14,55 @@ import { aiInvestigatorSummary, AiInvestigatorSummaryOutput, AiInvestigatorSumma
 import { useToast } from '@/hooks/use-toast';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useEnvironment } from '@/context/EnvironmentContext';
-import { apiFetch } from '@/lib/api';
+import { apiGet, apiPost, ApiError } from '@/lib/api';
 
 
-function IncidentDetailSheet({ incident, open, onOpenChange }: { incident: Incident | null, open: boolean, onOpenChange: (open: boolean) => void }) {
-    const { toast } = useToast();
-    const [summary, setSummary] = useState<AiInvestigatorSummaryOutput | null>(null);
-    const [isLoading, setIsLoading] = useState(false);
+function IncidentDetailSheet({ incident, open, onOpenChange }: { incident: Incident | null; open: boolean; onOpenChange: (open: boolean) => void }) {
+  const { toast } = useToast();
+  const [summary, setSummary] = useState<AiInvestigatorSummaryOutput | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [remediatingAction, setRemediatingAction] = useState<string | null>(null);
 
-    useEffect(() => {
-        if (incident && open) {
-            setIsLoading(true);
-            setSummary(null);
-            const input: AiInvestigatorSummaryInput = {
-                eventName: incident.eventName,
-                timestamp: incident.timestamp,
-                severity: incident.severity,
-                sourceIp: incident.sourceIp,
-                destinationIp: incident.destIp,
-                targetApplication: incident.targetApp,
-                eventDetails: incident.eventDetails,
-            };
+  useEffect(() => {
+    if (incident && open) {
+      setIsLoading(true);
+      setSummary(null);
+      const input: AiInvestigatorSummaryInput = {
+        eventName: incident.eventName,
+        timestamp: incident.timestamp,
+        severity: incident.severity,
+        sourceIp: incident.sourceIp,
+        destinationIp: incident.destIp,
+        targetApplication: incident.targetApp,
+        eventDetails: incident.eventDetails,
+      };
+      aiInvestigatorSummary(input)
+        .then(setSummary)
+        .catch(() => {
+          toast({ title: "AI Summary Failed", description: "Could not generate AI summary.", variant: "destructive" });
+          setSummary({ summaryText: "Could not generate AI summary.", attackVector: "N/A", potentialImpact: "N/A", context: "N/A" });
+        })
+        .finally(() => setIsLoading(false));
+    }
+  }, [incident, open, toast]);
 
-            aiInvestigatorSummary(input)
-                .then(setSummary)
-                .catch(err => {
-                    console.error("AI summary failed:", err);
-                    toast({
-                        title: "AI Summary Failed",
-                        description: "Could not generate AI summary.",
-                        variant: "destructive",
-                    });
-                    setSummary({ summaryText: "Could not generate AI summary.", attackVector: "N/A", potentialImpact: "N/A", context: "N/A" });
-                })
-                .finally(() => setIsLoading(false));
-        }
-    }, [incident, open, toast]);
-
-    const handleRemediation = async (action: string) => {
-        if (!incident) return;
-        try {
-            const response = await apiFetch('/incidents/remediate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ incidentId: incident.id, action: action }),
-            });
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ message: 'Remediation action failed' }));
-                throw new Error(errorData.details || errorData.message);
-            }
-            toast({
-                title: `Action: ${action}`,
-                description: `Action taken for incident ${incident.id}`,
-            });
-            onOpenChange(false);
-        } catch(error: any) {
-             console.error(`Remediation action '${action}' failed:`, error);
-             toast({
-                title: "Error",
-                description: error.message || `Failed to perform action '${action}' for incident ${incident.id}.`,
-                variant: 'destructive',
-            });
-        }
-    };
+  const handleRemediation = async (action: string) => {
+    if (!incident) return;
+    setRemediatingAction(action);
+    try {
+      await apiPost<{ success: boolean; message: string }>("/incidents/remediate", { incidentId: incident.id, action });
+      toast({ title: `Action: ${action}`, description: `Action taken for incident ${incident.id}.` });
+      onOpenChange(false);
+    } catch (err: unknown) {
+      toast({
+        title: "Error",
+        description: err instanceof Error ? err.message : `Failed to perform action '${action}' for incident ${incident.id}.`,
+        variant: "destructive",
+      });
+    } finally {
+      setRemediatingAction(null);
+    }
+  };
 
     if (!incident) return null;
 
@@ -126,9 +112,18 @@ function IncidentDetailSheet({ incident, open, onOpenChange }: { incident: Incid
                             <CardTitle>Remediation Actions</CardTitle>
                         </CardHeader>
                         <CardContent className="flex gap-2">
-                             <Button variant="outline" onClick={() => handleRemediation('Block IP')}><Ban className="mr-2 h-4 w-4" /> Block IP</Button>
-                             <Button variant="outline" onClick={() => handleRemediation('Isolate Endpoint')}><ShieldX className="mr-2 h-4 w-4" /> Isolate Endpoint</Button>
-                             <Button variant="secondary" onClick={() => handleRemediation('Dismiss')}><CheckCircle className="mr-2 h-4 w-4" /> Dismiss</Button>
+                             <Button variant="outline" disabled={!!remediatingAction} onClick={() => handleRemediation("Block IP")}>
+                               {remediatingAction === "Block IP" ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <Ban className="mr-2 h-4 w-4" />}
+                               Block IP
+                             </Button>
+                             <Button variant="outline" disabled={!!remediatingAction} onClick={() => handleRemediation("Isolate Endpoint")}>
+                               {remediatingAction === "Isolate Endpoint" ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <ShieldX className="mr-2 h-4 w-4" />}
+                               Isolate Endpoint
+                             </Button>
+                             <Button variant="secondary" disabled={!!remediatingAction} onClick={() => handleRemediation("Dismiss")}>
+                               {remediatingAction === "Dismiss" ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
+                               Dismiss
+                             </Button>
                         </CardContent>
                     </Card>
                     <Card>
@@ -154,29 +149,18 @@ export default function IncidentsPage() {
     const { environment } = useEnvironment();
 
     useEffect(() => {
-        const fetchData = async () => {
-            setIsLoading(true);
-            try {
-                const response = await apiFetch(`/incidents?env=${environment}`);
-                if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({ message: 'An unknown API error occurred.' }));
-                    throw new Error(errorData.details || errorData.message || `API call failed with status: ${response.status}`);
+        let cancelled = false;
+        setIsLoading(true);
+        apiGet<Incident[]>(`/incidents?env=${environment}`)
+            .then((result) => { if (!cancelled) setIncidents(result); })
+            .catch((err: ApiError) => {
+                if (!cancelled) {
+                    toast({ variant: "destructive", title: "Failed to Load Incidents Data", description: err.message });
+                    setIncidents([]);
                 }
-                const result = await response.json();
-                setIncidents(result);
-            } catch (error: any) {
-                console.error("Failed to fetch incidents:", error);
-                 toast({
-                    variant: "destructive",
-                    title: "Failed to Load Incidents Data",
-                    description: error.message,
-                });
-                setIncidents([]);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        fetchData();
+            })
+            .finally(() => { if (!cancelled) setIsLoading(false); });
+        return () => { cancelled = true; };
     }, [toast, environment]);
 
     const filteredIncidents = incidents.filter(inc =>

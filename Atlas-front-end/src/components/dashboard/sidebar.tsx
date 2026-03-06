@@ -1,135 +1,102 @@
-"use client";
+'use client';
 
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  ShieldCheck,
+  Shield,
   LayoutDashboard,
-  RadioTower,
+  Activity,
   Network,
   Laptop,
   Database,
+  AlertTriangle,
   FileText,
   Settings,
   ChevronLeft,
   ChevronRight,
-  Menu,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import type { NavItem } from '@/lib/types';
-import { Sheet, SheetContent, SheetTrigger } from '../ui/sheet';
 
-const navItems: NavItem[] = [
-  { title: 'Overview', href: '/overview', icon: LayoutDashboard },
-  { title: 'API Monitoring', href: '/api-monitoring', icon: RadioTower },
-  { title: 'Network Traffic', href: '/network-traffic', icon: Network },
-  { title: 'Endpoint Security', href: '/endpoint-security', icon: Laptop },
-  { title: 'Database Monitoring', href: '/database-monitoring', icon: Database },
-  { title: 'Incidents', href: '/incidents', icon: ShieldCheck },
-  { title: 'Reports', href: '/reports', icon: FileText },
-  { title: 'Settings', href: '/settings', icon: Settings },
+const navItems = [
+  { icon: LayoutDashboard, label: 'Overview', href: '/overview' },
+  { icon: Activity, label: 'API Monitoring', href: '/api-monitoring' },
+  { icon: Network, label: 'Network Traffic', href: '/network-traffic' },
+  { icon: Laptop, label: 'Endpoint Security', href: '/endpoint-security' },
+  { icon: Database, label: 'Database Monitoring', href: '/database-monitoring' },
+  { icon: AlertTriangle, label: 'Case Management', href: '/incidents' },
+  { icon: FileText, label: 'Reports', href: '/reports' },
+  { icon: Settings, label: 'Settings', href: '/settings' },
 ];
 
-const NavLinks = ({ isCollapsed }: { isCollapsed: boolean }) => {
+export function DashboardSidebar() {
+  const [collapsed, setCollapsed] = useState(false);
   const pathname = usePathname();
 
   return (
-    <nav className="flex-1 space-y-2 px-2">
-      {navItems.map((item) => {
-        const isActive = pathname.startsWith(item.href);
-        return (
-          <TooltipProvider key={item.title} delayDuration={0}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  asChild
-                  variant={isActive ? 'secondary' : 'ghost'}
-                  className={cn(
-                    'w-full justify-start',
-                    isCollapsed && 'justify-center'
-                  )}
-                >
-                  <Link href={item.href}>
-                    <item.icon className={cn('h-5 w-5', !isCollapsed && 'mr-3')} />
-                    <span className={cn(isCollapsed && 'sr-only')}>{item.title}</span>
-                  </Link>
-                </Button>
-              </TooltipTrigger>
-              {isCollapsed && (
-                <TooltipContent side="right">
-                  <p>{item.title}</p>
-                </TooltipContent>
-              )}
-            </Tooltip>
-          </TooltipProvider>
-        );
-      })}
-    </nav>
-  );
-};
-
-export function DashboardSidebar() {
-  const [isCollapsed, setIsCollapsed] = useState(false);
-
-  const toggleSidebar = () => {
-    setIsCollapsed(!isCollapsed);
-  };
-
-  return (
-    <>
-      {/* Mobile Sidebar */}
-      <div className="md:hidden sticky top-0 h-16 bg-card border-b border-border flex items-center px-4">
-        <Sheet>
-          <SheetTrigger asChild>
-            <Button variant="ghost" size="icon">
-              <Menu className="h-6 w-6" />
-              <span className="sr-only">Toggle Menu</span>
-            </Button>
-          </SheetTrigger>
-          <SheetContent side="left" className="p-0 w-72 bg-card border-r-0">
-             <div className="flex h-full flex-col">
-              <div className="h-16 flex items-center px-4 border-b border-border">
-                <ShieldCheck className="h-7 w-7 text-primary" />
-                <h1 className="ml-2 text-xl font-bold">ATLAS</h1>
-              </div>
-              <div className="py-4">
-                <NavLinks isCollapsed={false} />
-              </div>
+    <aside
+      className={cn(
+        'bg-slate-900 border-r border-slate-800 transition-all duration-300 flex flex-col flex-shrink-0',
+        collapsed ? 'w-20' : 'w-[260px]'
+      )}
+    >
+      {/* Logo */}
+      <div className="h-16 flex items-center justify-between px-4 border-b border-slate-800">
+        {!collapsed ? (
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-blue-500/20 rounded-lg flex items-center justify-center">
+              <Shield className="w-5 h-5 text-blue-400" />
             </div>
-          </SheetContent>
-        </Sheet>
-         <div className="flex items-center gap-2 ml-4">
-            <ShieldCheck className="h-7 w-7 text-primary" />
-            <h1 className="text-xl font-bold">ATLAS</h1>
-        </div>
+            <div>
+              <div className="text-base font-bold text-slate-50">ATLAS</div>
+              <div className="text-[10px] text-slate-500 -mt-0.5">Anomaly System</div>
+            </div>
+          </div>
+        ) : (
+          <div className="w-8 h-8 bg-blue-500/20 rounded-lg flex items-center justify-center mx-auto">
+            <Shield className="w-5 h-5 text-blue-400" />
+          </div>
+        )}
       </div>
 
-      {/* Desktop Sidebar */}
-      <aside
-        className={cn(
-          'hidden md:flex flex-col sticky top-0 h-screen bg-card border-r border-border transition-all duration-300 ease-in-out',
-          isCollapsed ? 'w-20' : 'w-64'
-        )}
-      >
-        <div className="flex items-center justify-between h-16 border-b border-border px-4">
-          <Link href="/overview" className={cn('flex items-center gap-2 overflow-hidden', isCollapsed && 'justify-center w-full')}>
-            <ShieldCheck className="h-7 w-7 text-primary flex-shrink-0" />
-            <span className={cn('text-xl font-bold', isCollapsed && 'sr-only')}>ATLAS</span>
-          </Link>
-        </div>
-        <div className="flex-1 py-4 overflow-y-auto">
-          <NavLinks isCollapsed={isCollapsed} />
-        </div>
-        <div className="p-4 border-t border-border">
-          <Button variant="ghost" onClick={toggleSidebar} className="w-full justify-center">
-            {isCollapsed ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
-            <span className="sr-only">Toggle sidebar</span>
-          </Button>
-        </div>
-      </aside>
-    </>
+      {/* Nav */}
+      <nav className="flex-1 py-4 px-2">
+        {navItems.map((item) => {
+          const isActive = pathname.startsWith(item.href);
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={cn(
+                'flex items-center gap-3 px-3 py-2.5 mb-1 rounded-lg transition-all relative',
+                isActive
+                  ? 'bg-blue-500/10 text-blue-400'
+                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+              )}
+            >
+              {isActive && (
+                <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-blue-500 rounded-r" />
+              )}
+              <item.icon className="w-5 h-5 flex-shrink-0" />
+              {!collapsed && <span className="text-sm">{item.label}</span>}
+            </Link>
+          );
+        })}
+      </nav>
+
+      {/* Collapse Toggle */}
+      <div className="p-2 border-t border-slate-800">
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          className="w-full flex items-center justify-center p-2 hover:bg-slate-800 rounded-lg transition-colors"
+        >
+          {collapsed ? (
+            <ChevronRight className="w-5 h-5 text-slate-400" />
+          ) : (
+            <ChevronLeft className="w-5 h-5 text-slate-400" />
+          )}
+        </button>
+      </div>
+    </aside>
   );
 }

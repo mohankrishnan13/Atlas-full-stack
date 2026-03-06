@@ -28,17 +28,105 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
-
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Config / Reference Tables
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Application(Base):
+    __tablename__ = "applications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    app_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+
+    __table_args__ = (
+        Index("uq_applications_env_app_id", "env", "app_id", unique=True),
+    )
+
+class Microservice(Base):
+    __tablename__ = "microservices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    service_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="Healthy")
+    position_top: Mapped[str] = mapped_column(String(16), nullable=False, default="50%")
+    position_left: Mapped[str] = mapped_column(String(16), nullable=False, default="50%")
+    connections_csv: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    __table_args__ = (
+        Index("uq_microservices_env_service_id", "env", "service_id", unique=True),
+    )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Atlas Users (Unified Authentication & RBAC)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AtlasUser(Base):
+    """
+    Unified User Table. One row = one ATLAS platform user.
+    Handles login, RBAC, and Profile settings.
+    """
+    __tablename__ = "atlas_users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True, default="cloud")
+    email: Mapped[str] = mapped_column(String(256), nullable=False, unique=True, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(256), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="Analyst")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    phone: Mapped[str] = mapped_column(String(64), nullable=True)
+    avatar: Mapped[str] = mapped_column(String(512), nullable=True, default="")
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    totp_secret: Mapped[str] = mapped_column(String(128), nullable=True)
+    invite_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+
+    sessions: Mapped[list["UserSession"]] = relationship(
+        "UserSession", back_populates="user", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("ix_atlas_users_role", "role"),
+        Index("uq_atlas_users_env_email", "env", "email", unique=True),
+    )
+
+class UserSession(Base):
+    """
+    One row = one login attempt (success or failure).
+
+    Used to populate the "Recent Account Activity" table on the profile page.
+    Stored for the last N sessions per user (app layer enforces the cap).
+    """
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("atlas_users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    ip_address: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+    location: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown")
+    device_info: Mapped[str] = mapped_column(String(256), nullable=False, default="Unknown Device")
+    status: Mapped[str] = mapped_column(String(128), nullable=False, default="Success")
+    logged_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+
+    user: Mapped["AtlasUser"] = relationship("AtlasUser", back_populates="sessions")
+
+    __table_args__ = (
+        Index("ix_user_sessions_user_logged", "user_id", "logged_at"),
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Network Traffic Logs
@@ -55,6 +143,17 @@ class NetworkLog(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)       # "cloud" | "local"
+    # Loghub common columns
+    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
+    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+    level: Mapped[str] = mapped_column(String(32), nullable=True)
+    component: Mapped[str] = mapped_column(String(128), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
+    event_template: Mapped[str] = mapped_column(Text, nullable=True)
+    # Security context columns
+    target_app: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown")
+    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="Medium", index=True)
     source_ip: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     dest_ip: Mapped[str] = mapped_column(String(64), nullable=False)
     app: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -63,7 +162,6 @@ class NetworkLog(Base):
     bandwidth_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     active_connections: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     dropped_packets: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
     raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     __table_args__ = (
@@ -87,6 +185,18 @@ class ApiLog(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    # Loghub common columns
+    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
+    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+    level: Mapped[str] = mapped_column(String(32), nullable=True)
+    component: Mapped[str] = mapped_column(String(128), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
+    event_template: Mapped[str] = mapped_column(Text, nullable=True)
+    # Security context columns
+    target_app: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown", index=True)
+    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="Medium", index=True)
+    source_ip: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
     app: Mapped[str] = mapped_column(String(128), nullable=False)
     path: Mapped[str] = mapped_column(String(512), nullable=False)
     method: Mapped[str] = mapped_column(String(16), nullable=False, default="GET")
@@ -100,7 +210,6 @@ class ApiLog(Base):
     hour_label: Mapped[str] = mapped_column(String(16), nullable=False)  # e.g. "9am"
     actual_calls: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     predicted_calls: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
     raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     __table_args__ = (
@@ -125,6 +234,16 @@ class EndpointLog(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    # Loghub common columns
+    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
+    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+    level: Mapped[str] = mapped_column(String(32), nullable=True)
+    component: Mapped[str] = mapped_column(String(128), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
+    event_template: Mapped[str] = mapped_column(Text, nullable=True)
+    # Security context columns
+    target_app: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown", index=True)
     workstation_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     employee: Mapped[str] = mapped_column(String(256), nullable=False)
     avatar: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -159,6 +278,16 @@ class DbActivityLog(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    # Loghub common columns
+    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
+    level: Mapped[str] = mapped_column(String(32), nullable=True)
+    component: Mapped[str] = mapped_column(String(128), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
+    event_template: Mapped[str] = mapped_column(Text, nullable=True)
+    # Security context columns
+    target_app: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown", index=True)
+    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="Medium", index=True)
     app: Mapped[str] = mapped_column(String(128), nullable=False)
     db_user: Mapped[str] = mapped_column(String(128), nullable=False)
     query_type: Mapped[str] = mapped_column(String(32), nullable=False)   # SELECT | INSERT | UPDATE | DELETE
@@ -201,6 +330,13 @@ class Incident(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     incident_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
     env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    # Loghub common columns
+    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
+    level: Mapped[str] = mapped_column(String(32), nullable=True)
+    component: Mapped[str] = mapped_column(String(128), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
+    event_template: Mapped[str] = mapped_column(Text, nullable=True)
     event_name: Mapped[str] = mapped_column(String(512), nullable=False)
     timestamp: Mapped[str] = mapped_column(String(64), nullable=False)
     severity: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
@@ -234,6 +370,17 @@ class Alert(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     alert_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
     env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    # Loghub common columns
+    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
+    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+    level: Mapped[str] = mapped_column(String(32), nullable=True)
+    component: Mapped[str] = mapped_column(String(128), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
+    event_template: Mapped[str] = mapped_column(Text, nullable=True)
+    # Security context columns
+    target_app: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown", index=True)
+    source_ip: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
     app: Mapped[str] = mapped_column(String(256), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     severity: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -281,73 +428,4 @@ class S3IngestCursor(Base):
         # The unique constraint prevents concurrent workers from double-ingesting
         # the same object if multiple ATLAS instances run simultaneously.
         Index("uq_s3_cursor_bucket_key", "bucket", "object_key", unique=True),
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Atlas Users  (authentication & RBAC)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class AtlasUser(Base):
-    """
-    One row = one ATLAS platform user.
-
-    Roles:
-      - "Admin"     — full access including user management and settings writes
-      - "Analyst"   — read/write on incidents, quarantine, remediation
-      - "Read-Only" — dashboard read access only; cannot trigger mitigations
-
-    `totp_secret` is stored encrypted at the application layer (future).
-    For the MVP it is stored in plaintext; add Fernet encryption before prod.
-
-    `phone` and `avatar` are optional profile fields surfaced in the profile page.
-    """
-    __tablename__ = "atlas_users"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    email: Mapped[str] = mapped_column(String(256), nullable=False, unique=True, index=True)
-    hashed_password: Mapped[str] = mapped_column(String(256), nullable=False)
-    name: Mapped[str] = mapped_column(String(128), nullable=False)
-    role: Mapped[str] = mapped_column(String(32), nullable=False, default="Analyst")
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    phone: Mapped[str] = mapped_column(String(64), nullable=True)
-    avatar: Mapped[str] = mapped_column(String(512), nullable=True)
-    totp_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    totp_secret: Mapped[str] = mapped_column(String(128), nullable=True)
-    invite_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-
-    # Relationship to sessions
-    sessions: Mapped[list["UserSession"]] = relationship(
-        "UserSession", back_populates="user", cascade="all, delete-orphan"
-    )
-
-    __table_args__ = (
-        Index("ix_atlas_users_role", "role"),
-    )
-
-
-class UserSession(Base):
-    """
-    One row = one login attempt (success or failure).
-
-    Used to populate the "Recent Account Activity" table on the profile page.
-    Stored for the last N sessions per user (app layer enforces the cap).
-    """
-    __tablename__ = "user_sessions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("atlas_users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    ip_address: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
-    location: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown")
-    device_info: Mapped[str] = mapped_column(String(256), nullable=False, default="Unknown Device")
-    status: Mapped[str] = mapped_column(String(128), nullable=False, default="Success")
-    logged_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-
-    user: Mapped["AtlasUser"] = relationship("AtlasUser", back_populates="sessions")
-
-    __table_args__ = (
-        Index("ix_user_sessions_user_logged", "user_id", "logged_at"),
     )
