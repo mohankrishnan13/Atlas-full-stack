@@ -83,6 +83,11 @@ export type ApiRoute = {
     action: string;
 };
 
+export type ApiBlockRouteRequest = {
+    app: string;
+    path: string;
+};
+
 export type ApiConsumptionByApp = {
     app: string;
     actual: number;
@@ -106,6 +111,11 @@ export type NetworkAnomaly = {
     app: string;
     port: number;
     type: string;
+};
+
+export type NetworkBlockRequest = {
+    sourceIp: string;
+    app: string;
 };
 
 export type NetworkTrafficData = {
@@ -135,6 +145,15 @@ export type WazuhEvent = {
     avatar: string;
     alert: string;
     severity: Severity;
+};
+
+export type QuarantineRequest = {
+    workstationId: string;
+};
+
+export type QuarantineResponse = {
+    success: boolean;
+    message: string;
 };
 
 export type EndpointSecurityData = {
@@ -169,6 +188,12 @@ export type DlpByTargetApp = {
     count: number;
 };
 
+export type DbKillQueryRequest = {
+    activityId: number;
+    app: string;
+    user: string;
+};
+
 export type DbMonitoringData = {
     activeConnections: number;
     avgQueryLatency: number;
@@ -198,4 +223,11 @@ export type TeamUser = {
   email: string;
   role: "Admin" | "Analyst" | "Read-Only";
   avatar: string;
+};
+
+// Header Data
+export type HeaderData = {
+  user: User;
+  applications: Application[];
+  recentAlerts: RecentAlert[];
 };

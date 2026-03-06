@@ -41,6 +41,74 @@ def _utcnow() -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Config / Reference Tables
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class Application(Base):
+    __tablename__ = "applications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    app_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+
+    __table_args__ = (
+        Index("uq_applications_env_app_id", "env", "app_id", unique=True),
+    )
+
+
+class Microservice(Base):
+    __tablename__ = "microservices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    service_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="Healthy")
+    position_top: Mapped[str] = mapped_column(String(16), nullable=False, default="50%")
+    position_left: Mapped[str] = mapped_column(String(16), nullable=False, default="50%")
+    connections_csv: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    __table_args__ = (
+        Index("uq_microservices_env_service_id", "env", "service_id", unique=True),
+    )
+
+
+class TeamUser(Base):
+    __tablename__ = "team_users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    email: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="Analyst")
+    avatar: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    invite_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        Index("uq_team_users_env_email", "env", "email", unique=True),
+    )
+
+
+class DashboardUser(Base):
+    __tablename__ = "dashboard_users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    email: Mapped[str] = mapped_column(String(256), nullable=False)
+    avatar: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    created_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        Index("uq_dashboard_users_env_email", "env", "email", unique=True),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Network Traffic Logs
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -55,6 +123,17 @@ class NetworkLog(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)       # "cloud" | "local"
+    # Loghub common columns
+    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
+    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+    level: Mapped[str] = mapped_column(String(32), nullable=True)
+    component: Mapped[str] = mapped_column(String(128), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
+    event_template: Mapped[str] = mapped_column(Text, nullable=True)
+    # Security context columns
+    target_app: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown")
+    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="Medium", index=True)
     source_ip: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     dest_ip: Mapped[str] = mapped_column(String(64), nullable=False)
     app: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -63,7 +142,6 @@ class NetworkLog(Base):
     bandwidth_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     active_connections: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     dropped_packets: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
     raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     __table_args__ = (
@@ -87,6 +165,18 @@ class ApiLog(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    # Loghub common columns
+    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
+    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+    level: Mapped[str] = mapped_column(String(32), nullable=True)
+    component: Mapped[str] = mapped_column(String(128), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
+    event_template: Mapped[str] = mapped_column(Text, nullable=True)
+    # Security context columns
+    target_app: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown", index=True)
+    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="Medium", index=True)
+    source_ip: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
     app: Mapped[str] = mapped_column(String(128), nullable=False)
     path: Mapped[str] = mapped_column(String(512), nullable=False)
     method: Mapped[str] = mapped_column(String(16), nullable=False, default="GET")
@@ -100,7 +190,6 @@ class ApiLog(Base):
     hour_label: Mapped[str] = mapped_column(String(16), nullable=False)  # e.g. "9am"
     actual_calls: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     predicted_calls: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
     raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     __table_args__ = (
@@ -125,6 +214,16 @@ class EndpointLog(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    # Loghub common columns
+    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
+    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+    level: Mapped[str] = mapped_column(String(32), nullable=True)
+    component: Mapped[str] = mapped_column(String(128), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
+    event_template: Mapped[str] = mapped_column(Text, nullable=True)
+    # Security context columns
+    target_app: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown", index=True)
     workstation_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     employee: Mapped[str] = mapped_column(String(256), nullable=False)
     avatar: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -159,6 +258,16 @@ class DbActivityLog(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    # Loghub common columns
+    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
+    level: Mapped[str] = mapped_column(String(32), nullable=True)
+    component: Mapped[str] = mapped_column(String(128), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
+    event_template: Mapped[str] = mapped_column(Text, nullable=True)
+    # Security context columns
+    target_app: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown", index=True)
+    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="Medium", index=True)
     app: Mapped[str] = mapped_column(String(128), nullable=False)
     db_user: Mapped[str] = mapped_column(String(128), nullable=False)
     query_type: Mapped[str] = mapped_column(String(32), nullable=False)   # SELECT | INSERT | UPDATE | DELETE
@@ -201,6 +310,13 @@ class Incident(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     incident_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
     env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    # Loghub common columns
+    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
+    level: Mapped[str] = mapped_column(String(32), nullable=True)
+    component: Mapped[str] = mapped_column(String(128), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
+    event_template: Mapped[str] = mapped_column(Text, nullable=True)
     event_name: Mapped[str] = mapped_column(String(512), nullable=False)
     timestamp: Mapped[str] = mapped_column(String(64), nullable=False)
     severity: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
@@ -234,6 +350,17 @@ class Alert(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     alert_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
     env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    # Loghub common columns
+    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
+    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+    level: Mapped[str] = mapped_column(String(32), nullable=True)
+    component: Mapped[str] = mapped_column(String(128), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
+    event_template: Mapped[str] = mapped_column(Text, nullable=True)
+    # Security context columns
+    target_app: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown", index=True)
+    source_ip: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
     app: Mapped[str] = mapped_column(String(256), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     severity: Mapped[str] = mapped_column(String(32), nullable=False)
