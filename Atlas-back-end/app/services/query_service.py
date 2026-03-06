@@ -1,17 +1,5 @@
 """
 services/query_service.py — Dashboard Data Query Service
-
-This service is the single source of truth for how PostgreSQL data is
-assembled into the exact JSON shapes the React frontend expects.
-
-Design principles:
-  - Each public method corresponds to one frontend API route.
-  - Methods return Pydantic model instances — the router layer does NO
-    data transformation, it only calls these methods and returns results.
-  - All queries are async and use SQLAlchemy Core (select()) for maximum
-    performance and testability.
-  - The `env` parameter ("cloud" | "local") is a first-class filter on
-    every query — it's the ATLAS environment-switching mechanism.
 """
 
 import logging
@@ -25,13 +13,12 @@ from app.models.db_models import (
     Alert,
     Application as ApplicationRow,
     ApiLog,
-    DashboardUser as DashboardUserRow,
+    AtlasUser,  # <── Replaced DashboardUser and TeamUser
     DbActivityLog,
     EndpointLog,
     Incident,
     Microservice as MicroserviceRow,
     NetworkLog,
-    TeamUser as TeamUserRow,
 )
 from app.models.schemas import (
     AlertTypeDistribution,
@@ -70,11 +57,15 @@ CHART_FILLS = [
     "hsl(var(--chart-5))",
 ]
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Header / Notification Bell
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def get_header_data(env: str, db: AsyncSession) -> HeaderData:
+    # ── Swapped to AtlasUser ──
     user_row = (
         await db.execute(
-            select(DashboardUserRow).where(DashboardUserRow.env == env).order_by(DashboardUserRow.id.asc()).limit(1)
+            select(AtlasUser).where(AtlasUser.env == env).order_by(AtlasUser.id.asc()).limit(1)
         )
     ).scalars().first()
 
@@ -113,15 +104,32 @@ async def get_header_data(env: str, db: AsyncSession) -> HeaderData:
     return HeaderData(user=user, applications=applications, recentAlerts=recent_alerts)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Team Users (Settings Page)
+# ─────────────────────────────────────────────────────────────────────────────
+
 async def get_team_users(env: str, db: AsyncSession) -> List[TeamUser]:
+    # ── Swapped to AtlasUser and mapped to the updated TeamUser schema ──
     rows = (
         await db.execute(
-            select(TeamUserRow)
-            .where(TeamUserRow.env == env)
-            .order_by(TeamUserRow.id.asc())
+            select(AtlasUser)
+            .where(AtlasUser.env == env)
+            .order_by(AtlasUser.id.asc())
         )
     ).scalars().all()
-    return [TeamUser(id=u.id, name=u.name, email=u.email, role=u.role, avatar=u.avatar) for u in rows]
+    
+    return [
+        TeamUser(
+            id=u.id, 
+            name=u.name, 
+            email=u.email, 
+            role=u.role, 
+            avatar=u.avatar,
+            is_active=u.is_active,
+            invite_pending=u.invite_pending
+        ) 
+        for u in rows
+    ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -253,7 +261,6 @@ async def get_api_monitoring(env: str, db: AsyncSession) -> ApiMonitoringData:
     Assembles the API Monitoring page payload.
     Deduplicates routes and builds hourly usage chart from api_logs.
     """
-    # KPI: total calls today (total rows), blockedRequests (high/critical rows)
     result = await db.execute(
         select(
             func.count(ApiLog.id).label("total"),
@@ -279,7 +286,6 @@ async def get_api_monitoring(env: str, db: AsyncSession) -> ApiMonitoringData:
             apiRouting=[],
         )
 
-    # Consumption by app: actual = count(*), limit = max(actual*1.2, actual)
     result = await db.execute(
         select(ApiLog.target_app, func.count(ApiLog.id).label("actual"))
         .where(ApiLog.env == env)
@@ -298,7 +304,6 @@ async def get_api_monitoring(env: str, db: AsyncSession) -> ApiMonitoringData:
             )
         )
 
-    # Routing: top routes by volume; dedupe is natural with group_by
     result = await db.execute(
         select(
             ApiLog.target_app,
@@ -343,10 +348,6 @@ async def get_api_monitoring(env: str, db: AsyncSession) -> ApiMonitoringData:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def get_network_traffic(env: str, db: AsyncSession) -> NetworkTrafficData:
-    """
-    Assembles the Network Traffic page payload from network_logs.
-    KPI stats are taken from the first matching row (env-level aggregates).
-    """
     result = await db.execute(
         select(NetworkLog).where(NetworkLog.env == env).order_by(NetworkLog.id)
     )
@@ -383,12 +384,6 @@ async def get_network_traffic(env: str, db: AsyncSession) -> NetworkTrafficData:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def get_endpoint_security(env: str, db: AsyncSession) -> EndpointSecurityData:
-    """
-    Assembles the Endpoint Security page payload.
-
-    OS Distribution and Alert Type distribution are computed by aggregating
-    counts from endpoint_logs — no hardcoded values.
-    """
     result = await db.execute(
         select(
             func.count(EndpointLog.id).label("total"),
@@ -471,13 +466,6 @@ async def get_endpoint_security(env: str, db: AsyncSession) -> EndpointSecurityD
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def get_db_monitoring(env: str, db: AsyncSession) -> DbMonitoringData:
-    """
-    Assembles the Database Monitoring page payload.
-
-    operationsChart is built by grouping by hour_label — the JSONL files
-    store hourly snapshots, so each hour_label appears multiple times but
-    we take the last value seen (latest snapshot wins).
-    """
     result = await db.execute(
         select(DbActivityLog).where(DbActivityLog.env == env).order_by(DbActivityLog.id)
     )
@@ -489,13 +477,11 @@ async def get_db_monitoring(env: str, db: AsyncSession) -> DbMonitoringData:
             operationsByApp=[], dlpByTargetApp=[], suspiciousActivity=[],
         )
 
-    # ── KPI stats from a representative row ───────────────────────────────────
     first = logs[0]
     active_connections = first.active_connections
     avg_latency = first.avg_latency_ms
     export_volume = first.data_export_volume_tb
 
-    # ── Operations BY APP (categorical bar chart — NO time-series) ─────────────
     app_ops: Dict[str, Dict[str, int]] = defaultdict(lambda: {"SELECT": 0, "INSERT": 0, "UPDATE": 0, "DELETE": 0})
     for log in logs:
         app_ops[log.app]["SELECT"] += log.select_count
@@ -513,7 +499,6 @@ async def get_db_monitoring(env: str, db: AsyncSession) -> DbMonitoringData:
         for app, data in sorted(app_ops.items(), key=lambda x: -(x[1]["SELECT"] + x[1]["INSERT"] + x[1]["UPDATE"] + x[1]["DELETE"]))[:12]
     ]
 
-    # ── DLP / Suspicious BY TARGET APP (categorical bar chart) ────────────────
     suspicious_logs_list = [l for l in logs if l.is_suspicious]
     app_dlp: Dict[str, int] = defaultdict(int)
     for log in suspicious_logs_list:
@@ -523,7 +508,6 @@ async def get_db_monitoring(env: str, db: AsyncSession) -> DbMonitoringData:
         for app, count in sorted(app_dlp.items(), key=lambda x: -x[1])
     ]
 
-    # ── Suspicious Activity table ─────────────────────────────────────────────
     suspicious_activity = [
         SuspiciousActivity(
             id=i + 1,
@@ -551,10 +535,6 @@ async def get_db_monitoring(env: str, db: AsyncSession) -> DbMonitoringData:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def get_incidents(env: str, db: AsyncSession) -> List[IncidentSchema]:
-    """
-    Returns the incidents list for a given environment.
-    Frontend expects a direct JSON array (no wrapper object).
-    """
     result = await db.execute(
         select(Incident).where(Incident.env == env).order_by(Incident.timestamp.desc())
     )
@@ -575,13 +555,11 @@ async def get_incidents(env: str, db: AsyncSession) -> List[IncidentSchema]:
         for inc in incidents
     ]
 
-
 async def update_incident_status(
     incident_id: str,
     new_status: str,
     db: AsyncSession,
 ) -> Optional[IncidentSchema]:
-    """Updates an incident's status in place. Returns None if not found."""
     result = await db.execute(
         select(Incident).where(Incident.incident_id == incident_id)
     )
@@ -603,7 +581,6 @@ async def update_incident_status(
         status=inc.status,
         eventDetails=inc.event_details,
     )
-
 
 def _to_incident_schema(inc: Incident) -> IncidentSchema:
     return IncidentSchema(

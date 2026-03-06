@@ -15,13 +15,13 @@ from app.models.db_models import (
     Alert,
     ApiLog,
     Application,
-    DashboardUser,
+    AtlasUser,  # Replaced DashboardUser & TeamUser
     DbActivityLog,
     EndpointLog,
     Microservice,
     NetworkLog,
-    TeamUser,
 )
+from app.services.auth_service import hash_password  # Added to secure the default admin
 
 
 def _utcnow() -> str:
@@ -86,19 +86,28 @@ def _iter_csv_rows(csv_path: Path) -> Iterable[Dict[str, Any]]:
 
 async def _ensure_seed_config(db: AsyncSession) -> None:
     for env in ("cloud", "local"):
-        existing = (
-            await db.execute(select(DashboardUser).where(DashboardUser.env == env).limit(1))
+        
+        # ── 1. Unified AtlasUser Seeding ──
+        existing_user = (
+            await db.execute(select(AtlasUser).where(AtlasUser.env == env).limit(1))
         ).scalars().first()
-        if not existing:
+        
+        if not existing_user:
+            # We must hash the password so the login endpoint works!
+            default_password = hash_password("Admin123!")
             db.add(
-                DashboardUser(
+                AtlasUser(
                     env=env,
-                    name="Jane Doe" if env == "cloud" else "John Admin",
-                    email="jane.doe@atlas-sec.com" if env == "cloud" else "john.admin@atlas-internal.com",
+                    name="Jane Admin" if env == "cloud" else "John Admin",
+                    email="admin@atlas-sec.com" if env == "cloud" else "admin@atlas-internal.com",
+                    hashed_password=default_password,
+                    role="Admin",
+                    is_active=True,
                     avatar="https://i.pravatar.cc/150?img=8",
                 )
             )
 
+        # ── 2. Applications Seeding ──
         apps = [
             ("all", "All Applications" if env == "cloud" else "All Systems"),
             ("naukri", "Naukri"),
@@ -117,22 +126,7 @@ async def _ensure_seed_config(db: AsyncSession) -> None:
             if not found:
                 db.add(Application(env=env, app_id=app_id, name=name))
 
-        existing_team = (
-            await db.execute(select(TeamUser).where(TeamUser.env == env).limit(1))
-        ).scalars().first()
-        if not existing_team:
-            db.add(
-                TeamUser(
-                    env=env,
-                    name="Atlas Admin",
-                    email=f"admin-{env}@atlas.local",
-                    role="Admin",
-                    avatar="https://i.pravatar.cc/150?img=1",
-                    is_active=True,
-                    invite_pending=False,
-                )
-            )
-
+        # ── 3. Microservices Seeding ──
         existing_ms = (
             await db.execute(select(Microservice).where(Microservice.env == env).limit(1))
         ).scalars().first()
@@ -335,12 +329,15 @@ async def ingest_loghub(data_root: Path, batch_size: int = 2000) -> None:
                             )
                         )
 
+                    # ── Memory Leak Fix ──
                     if len(buffer) >= batch_size:
                         db.add_all(buffer)
+                        await db.flush()  # Crucial: Push to Postgres and clear session memory
                         buffer.clear()
 
                 if buffer:
                     db.add_all(buffer)
+                    await db.flush()
                     buffer.clear()
 
             # Post-ingest: create a few alerts per file to populate header

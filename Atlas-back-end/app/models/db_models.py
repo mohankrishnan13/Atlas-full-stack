@@ -28,22 +28,18 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
-
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Config / Reference Tables
 # ─────────────────────────────────────────────────────────────────────────────
-
 
 class Application(Base):
     __tablename__ = "applications"
@@ -56,7 +52,6 @@ class Application(Base):
     __table_args__ = (
         Index("uq_applications_env_app_id", "env", "app_id", unique=True),
     )
-
 
 class Microservice(Base):
     __tablename__ = "microservices"
@@ -74,39 +69,64 @@ class Microservice(Base):
         Index("uq_microservices_env_service_id", "env", "service_id", unique=True),
     )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Atlas Users (Unified Authentication & RBAC)
+# ─────────────────────────────────────────────────────────────────────────────
 
-class TeamUser(Base):
-    __tablename__ = "team_users"
+class AtlasUser(Base):
+    """
+    Unified User Table. One row = one ATLAS platform user.
+    Handles login, RBAC, and Profile settings.
+    """
+    __tablename__ = "atlas_users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True, default="cloud")
+    email: Mapped[str] = mapped_column(String(256), nullable=False, unique=True, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(256), nullable=False)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
-    email: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="Analyst")
-    avatar: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    phone: Mapped[str] = mapped_column(String(64), nullable=True)
+    avatar: Mapped[str] = mapped_column(String(512), nullable=True, default="")
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    totp_secret: Mapped[str] = mapped_column(String(128), nullable=True)
     invite_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
 
-    __table_args__ = (
-        Index("uq_team_users_env_email", "env", "email", unique=True),
+    sessions: Mapped[list["UserSession"]] = relationship(
+        "UserSession", back_populates="user", cascade="all, delete-orphan"
     )
 
+    __table_args__ = (
+        Index("ix_atlas_users_role", "role"),
+        Index("uq_atlas_users_env_email", "env", "email", unique=True),
+    )
 
-class DashboardUser(Base):
-    __tablename__ = "dashboard_users"
+class UserSession(Base):
+    """
+    One row = one login attempt (success or failure).
+
+    Used to populate the "Recent Account Activity" table on the profile page.
+    Stored for the last N sessions per user (app layer enforces the cap).
+    """
+    __tablename__ = "user_sessions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(128), nullable=False)
-    email: Mapped[str] = mapped_column(String(256), nullable=False)
-    avatar: Mapped[str] = mapped_column(String(512), nullable=False, default="")
-    created_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("atlas_users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    ip_address: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+    location: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown")
+    device_info: Mapped[str] = mapped_column(String(256), nullable=False, default="Unknown Device")
+    status: Mapped[str] = mapped_column(String(128), nullable=False, default="Success")
+    logged_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+
+    user: Mapped["AtlasUser"] = relationship("AtlasUser", back_populates="sessions")
 
     __table_args__ = (
-        Index("uq_dashboard_users_env_email", "env", "email", unique=True),
+        Index("ix_user_sessions_user_logged", "user_id", "logged_at"),
     )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Network Traffic Logs
@@ -408,73 +428,4 @@ class S3IngestCursor(Base):
         # The unique constraint prevents concurrent workers from double-ingesting
         # the same object if multiple ATLAS instances run simultaneously.
         Index("uq_s3_cursor_bucket_key", "bucket", "object_key", unique=True),
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Atlas Users  (authentication & RBAC)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class AtlasUser(Base):
-    """
-    One row = one ATLAS platform user.
-
-    Roles:
-      - "Admin"     — full access including user management and settings writes
-      - "Analyst"   — read/write on incidents, quarantine, remediation
-      - "Read-Only" — dashboard read access only; cannot trigger mitigations
-
-    `totp_secret` is stored encrypted at the application layer (future).
-    For the MVP it is stored in plaintext; add Fernet encryption before prod.
-
-    `phone` and `avatar` are optional profile fields surfaced in the profile page.
-    """
-    __tablename__ = "atlas_users"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    email: Mapped[str] = mapped_column(String(256), nullable=False, unique=True, index=True)
-    hashed_password: Mapped[str] = mapped_column(String(256), nullable=False)
-    name: Mapped[str] = mapped_column(String(128), nullable=False)
-    role: Mapped[str] = mapped_column(String(32), nullable=False, default="Analyst")
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    phone: Mapped[str] = mapped_column(String(64), nullable=True)
-    avatar: Mapped[str] = mapped_column(String(512), nullable=True)
-    totp_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    totp_secret: Mapped[str] = mapped_column(String(128), nullable=True)
-    invite_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-
-    # Relationship to sessions
-    sessions: Mapped[list["UserSession"]] = relationship(
-        "UserSession", back_populates="user", cascade="all, delete-orphan"
-    )
-
-    __table_args__ = (
-        Index("ix_atlas_users_role", "role"),
-    )
-
-
-class UserSession(Base):
-    """
-    One row = one login attempt (success or failure).
-
-    Used to populate the "Recent Account Activity" table on the profile page.
-    Stored for the last N sessions per user (app layer enforces the cap).
-    """
-    __tablename__ = "user_sessions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("atlas_users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    ip_address: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
-    location: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown")
-    device_info: Mapped[str] = mapped_column(String(256), nullable=False, default="Unknown Device")
-    status: Mapped[str] = mapped_column(String(128), nullable=False, default="Success")
-    logged_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-
-    user: Mapped["AtlasUser"] = relationship("AtlasUser", back_populates="sessions")
-
-    __table_args__ = (
-        Index("ix_user_sessions_user_logged", "user_id", "logged_at"),
     )

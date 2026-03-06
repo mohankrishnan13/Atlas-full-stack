@@ -4,11 +4,11 @@
  * src/lib/api.ts — ATLAS Centralized API Client
  *
  * Features:
- *  - Auto-attaches JWT Bearer token from localStorage
- *  - Global 401 handler: clears token and redirects to /login
- *  - Typed helpers: apiGet, apiPost, apiPut, apiPatch, apiDelete
- *    that throw ApiError on non-OK responses
- *  - apiFetch — raw Response escape hatch (backward compat)
+ * - Auto-attaches JWT Bearer token from localStorage
+ * - Auto-injects the active environment (cloud vs local) into query params
+ * - Global 401 handler: clears token and redirects to /login
+ * - Safely handles FormData (file uploads) without breaking boundaries
+ * - Typed helpers: apiGet, apiPost, apiPut, apiPatch, apiDelete
  */
 
 const getBaseUrl = (): string =>
@@ -17,26 +17,52 @@ const getBaseUrl = (): string =>
 const getToken = (): string | null =>
   typeof window !== 'undefined' ? localStorage.getItem('atlas_auth_token') : null;
 
+// ── NEW: Environment State Manager ──
+export const getActiveEnv = (): string =>
+  typeof window !== 'undefined' ? localStorage.getItem('atlas_active_env') || 'cloud' : 'cloud';
+
+export const setActiveEnv = (env: 'cloud' | 'local') => {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('atlas_active_env', env);
+    // Reload the page to ensure all components fetch the new environment data
+    window.location.reload(); 
+  }
+};
+
 /** Low-level fetch. Returns raw Response. Handles 401 globally. */
 export const apiFetch = async (
   endpoint: string,
   options: RequestInit = {}
 ): Promise<Response> => {
-  const headers = new Headers({
-    'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string> | undefined),
-  });
+  
+  // 1. Setup Headers dynamically (Fix for FormData file uploads)
+  const headers = new Headers(options.headers || {});
+  if (!(options.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
 
+  // 2. Attach JWT
   const token = getToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
 
-  const response = await fetch(`${getBaseUrl()}${endpoint}`, { ...options, headers });
+  // 3. Auto-Inject the Environment Query Parameter
+  // We skip this for auth login routes since they don't need the env query param
+  let finalEndpoint = endpoint;
+  if (!finalEndpoint.includes('env=') && !finalEndpoint.includes('/auth/login')) {
+    const env = getActiveEnv();
+    finalEndpoint += finalEndpoint.includes('?') ? `&env=${env}` : `?env=${env}`;
+  }
 
+  // 4. Execute the Network Request
+  const response = await fetch(`${getBaseUrl()}${finalEndpoint}`, { ...options, headers });
+
+  // 5. Global 401 Unauthorized Interceptor
   if (response.status === 401 && typeof window !== 'undefined') {
-    console.warn('[ATLAS] Session expired — redirecting to login.');
+    console.warn('[ATLAS] Session expired or unauthorized — redirecting to login.');
     localStorage.removeItem('atlas_auth_token');
     window.location.href = '/login';
-    return new Promise(() => {});
+    // Return a dangling promise to stop React execution while the browser redirects
+    return new Promise(() => {}); 
   }
 
   return response;
@@ -59,6 +85,8 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
+// ── Typed Wrapper Methods ──
+
 export async function apiGet<T>(endpoint: string): Promise<T> {
   const res = await apiFetch(endpoint);
   if (!res.ok) throw new ApiError(res.status, await parseError(res));
@@ -66,27 +94,30 @@ export async function apiGet<T>(endpoint: string): Promise<T> {
 }
 
 export async function apiPost<T = unknown>(endpoint: string, body?: unknown): Promise<T> {
+  const isFormData = body instanceof FormData;
   const res = await apiFetch(endpoint, {
     method: 'POST',
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: isFormData ? (body as FormData) : JSON.stringify(body),
   });
   if (!res.ok) throw new ApiError(res.status, await parseError(res));
   return res.json();
 }
 
 export async function apiPut<T = unknown>(endpoint: string, body?: unknown): Promise<T> {
+  const isFormData = body instanceof FormData;
   const res = await apiFetch(endpoint, {
     method: 'PUT',
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: isFormData ? (body as FormData) : JSON.stringify(body),
   });
   if (!res.ok) throw new ApiError(res.status, await parseError(res));
   return res.json();
 }
 
 export async function apiPatch<T = unknown>(endpoint: string, body?: unknown): Promise<T> {
+  const isFormData = body instanceof FormData;
   const res = await apiFetch(endpoint, {
     method: 'PATCH',
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: isFormData ? (body as FormData) : JSON.stringify(body),
   });
   if (!res.ok) throw new ApiError(res.status, await parseError(res));
   return res.json();
@@ -97,3 +128,11 @@ export async function apiDelete<T = unknown>(endpoint: string): Promise<T> {
   if (!res.ok) throw new ApiError(res.status, await parseError(res));
   return res.json();
 }
+
+// ── Utility ──
+export const logout = () => {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('atlas_auth_token');
+    window.location.href = '/login';
+  }
+};

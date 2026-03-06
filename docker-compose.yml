@@ -49,8 +49,8 @@ services:
     # Not exposed to the host — only reachable by services on the atlas-network.
     # To connect with a GUI like pgAdmin or TablePlus:
     #   change the ports block to:  ports: - "5432:5432"
-    expose:
-      - "5432"
+    ports:
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

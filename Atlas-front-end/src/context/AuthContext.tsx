@@ -39,6 +39,7 @@ interface AuthContextType {
   user: AuthUser | null;
   setUser: (user: AuthUser | null) => void;
   isAuthLoading: boolean;
+  logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -47,8 +48,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
 
+  const logout = () => {
+    localStorage.removeItem('atlas_auth_token');
+    setUser(null);
+  };
+
   useEffect(() => {
-    // Only fetch if there's a token — avoids a 401 on public pages
     const token =
       typeof window !== 'undefined'
         ? localStorage.getItem('atlas_auth_token')
@@ -61,15 +66,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     apiGet<AuthUser>('/api/auth/me')
       .then(setUser)
-      .catch(() => {
-        // apiFetch already handles 401 redirect; other errors → clear user
-        setUser(null);
-      })
+      .catch(() => setUser(null))
       .finally(() => setIsAuthLoading(false));
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, setUser, isAuthLoading }}>
+    <AuthContext.Provider
+      value={{ user, setUser, isAuthLoading, logout }}
+    >
       {children}
     </AuthContext.Provider>
   );

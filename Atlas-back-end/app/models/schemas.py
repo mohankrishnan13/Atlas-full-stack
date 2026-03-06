@@ -238,6 +238,7 @@ class Application(BaseModel):
 
 
 class User(BaseModel):
+    """Used by the HeaderData for the top-right profile dropdown."""
     name: str
     email: str
     avatar: str
@@ -254,11 +255,14 @@ class HeaderData(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TeamUser(BaseModel):
+    """Used by the Settings -> User Access page."""
     id: int
     name: str
     email: str
     role: str          # "Admin" | "Analyst"
     avatar: str
+    is_active: bool
+    invite_pending: bool
 
 
 # ─────────────────────────────────────────────────────────────────────────────
