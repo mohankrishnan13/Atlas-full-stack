@@ -62,6 +62,24 @@ from app.models.schemas import (
     RecentDownloadRow,
     ReportsOverviewResponse,
     ScheduledReportRow as ScheduledReportSchema,
+    FigmaApiMonitoringResponse,
+    FigmaDashboardAppHealth,
+    FigmaDashboardResponse,
+    FigmaApiOveruseByApp,
+    FigmaAbusedEndpointRow,
+    FigmaTopConsumerRow,
+    FigmaApiMitigationFeedRow,
+    FigmaNetworkAnomalyRow,
+    FigmaNetworkTrafficResponse,
+    FigmaEndpointVulnerableRow,
+    FigmaEndpointPolicyViolatorRow,
+    FigmaEndpointEventAction,
+    FigmaEndpointEventRow,
+    FigmaEndpointSecurityResponse,
+    FigmaDbExfiltrationRow,
+    FigmaDbSuspiciousSourceRow,
+    FigmaDbSuspiciousActivityRow,
+    FigmaDatabaseMonitoringResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,6 +91,40 @@ CHART_FILLS = [
     "hsl(var(--chart-4))",
     "hsl(var(--chart-5))",
 ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers (Figma screenshot contracts)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _is_external_ip(ip: str) -> bool:
+    ip = (ip or "").strip()
+    return bool(ip) and not (
+        ip.startswith("10.")
+        or ip.startswith("192.168.")
+        or ip.startswith("172.16.")
+        or ip.startswith("172.17.")
+        or ip.startswith("172.18.")
+        or ip.startswith("172.19.")
+        or ip.startswith("172.2")
+        or ip.startswith("172.3")
+    )
+
+
+def _format_external_ip(ip: str) -> str:
+    return f"External IP (Public): {ip}" if _is_external_ip(ip) else ip
+
+
+def _k_label(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.1f}M".rstrip("0").rstrip(".") + "M"
+    if n >= 1000:
+        return f"{int(n/1000)}K"
+    return str(n)
+
+
+def _usd_label(amount: float) -> str:
+    return f"${amount:,.0f}"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Header / Notification Bell
@@ -864,3 +916,299 @@ async def generate_report(env: str, body: GenerateReportRequest, db: AsyncSessio
         downloadUrl=d.download_url,
     )
     return GenerateReportResponse(success=True, message="Report generated.", download=download)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Figma Widget Endpoints (Pixel-Perfect Screenshots)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def get_figma_dashboard(env: str, db: AsyncSession) -> FigmaDashboardResponse:
+    overview = await get_overview(env, db)
+    api_mon = await get_api_monitoring(env, db)
+
+    failing = [s.name for s in overview.microservices if s.status == "Failing"][:3]
+    top_anoms = [f"{a.service}: {a.type}" for a in overview.systemAnomalies[:3]]
+
+    ai_briefing = (
+        "Detected abnormal API consumption on high-cost services. "
+        + (f"Failing nodes: {', '.join(failing)}. " if failing else "")
+        + (f"Recent anomalies: {', '.join(top_anoms)}." if top_anoms else "")
+    )
+
+    app_health: List[FigmaDashboardAppHealth] = []
+    for row in api_mon.apiConsumptionByApp[:3]:
+        status = "healthy"
+        if row.actual >= row.limit:
+            status = "critical"
+        elif row.actual >= int(row.limit * 0.8):
+            status = "warning"
+
+        action_label = (
+            "Apply Hard Limit"
+            if status == "critical"
+            else "Isolate DB"
+            if status == "warning"
+            else "View Traffic"
+        )
+
+        app_health.append(
+            FigmaDashboardAppHealth(
+                targetApp=row.app,
+                currentLoadLabel=f"{row.actual} req/m",
+                status=status,
+                actionLabel=action_label,
+            )
+        )
+
+    return FigmaDashboardResponse(aiBriefing=ai_briefing, appHealth=app_health)
+
+
+async def get_figma_api_monitoring(env: str, db: AsyncSession) -> FigmaApiMonitoringResponse:
+    result = await db.execute(select(ApiLog).where(ApiLog.env == env).order_by(ApiLog.id))
+    logs = result.scalars().all()
+
+    total_calls = int(max((l.calls_today for l in logs), default=0))
+    blocked = int(max((l.blocked_count for l in logs), default=0))
+
+    active_incidents = int(
+        (
+            await db.execute(
+                select(func.count(Incident.id)).where(
+                    Incident.env == env,
+                    Incident.severity.in_(["Critical", "High"]),
+                    Incident.status.in_(["Active", "Investigating", "Open"]),
+                )
+            )
+        ).scalar()
+        or 0
+    )
+
+    api_mon = await get_api_monitoring(env, db)
+    overuse = [
+        FigmaApiOveruseByApp(targetApp=a.app, currentRpm=int(a.actual), limitRpm=int(a.limit))
+        for a in api_mon.apiConsumptionByApp[:8]
+    ]
+
+    routing = api_mon.apiRouting
+    top_routes = sorted(
+        routing,
+        key=lambda r: (1 if r.action == "Blocked" else 0, abs(r.trend), r.cost),
+        reverse=True,
+    )[:8]
+
+    abused: List[FigmaAbusedEndpointRow] = []
+    for r in top_routes:
+        sev = "medium"
+        if r.action == "Blocked":
+            sev = "critical"
+        elif r.trend >= 20:
+            sev = "high"
+        endpoint = f"[{r.app}] {r.path}"
+        abused.append(
+            FigmaAbusedEndpointRow(
+                endpoint=endpoint,
+                violations=max(1, abs(int(r.trend)) * 50),
+                severity=sev,
+            )
+        )
+
+    consumer_map: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"calls": 0, "cost": 0.0, "app": ""})
+    for l in logs:
+        key = l.source_ip or l.app
+        consumer_map[key]["calls"] += int(l.actual_calls or 0)
+        consumer_map[key]["cost"] += float(l.cost_per_call or 0.0) * float(l.actual_calls or 0.0)
+        consumer_map[key]["app"] = l.app
+
+    top_consumers: List[FigmaTopConsumerRow] = []
+    for consumer, agg in sorted(consumer_map.items(), key=lambda x: -x[1]["calls"])[:8]:
+        app_name = agg["app"] or "Unknown"
+        calls = int(agg["calls"])
+        cost = float(agg["cost"])
+        is_overuse = any(o.targetApp == app_name and o.currentRpm > o.limitRpm for o in overuse)
+        action_type = "neutral"
+        action_label = "Audit Logs"
+        if is_overuse:
+            action_type = "warning"
+            action_label = "Throttle Limits"
+        if _is_external_ip(consumer):
+            action_type = "critical"
+            action_label = "Revoke Key"
+
+        top_consumers.append(
+            FigmaTopConsumerRow(
+                consumer=_format_external_ip(consumer),
+                targetApp=f"[{app_name}]",
+                callsLabel=_k_label(calls),
+                costLabel=_usd_label(cost),
+                isOveruse=bool(is_overuse),
+                actionLabel=action_label,
+                actionType=action_type,
+            )
+        )
+
+    mitigation_feed: List[FigmaApiMitigationFeedRow] = []
+    for r in top_routes[:4]:
+        offender = "api_bot_suspicious"
+        if logs:
+            offender = _format_external_ip(
+                next(
+                    (l.source_ip for l in logs if l.app == r.app and l.source_ip),
+                    "185.220.101.45",
+                )
+            )
+        mitigation_feed.append(
+            FigmaApiMitigationFeedRow(
+                target=f"[{r.app}]",
+                offender=offender,
+                violation="Rate Limit Exceeded" if r.action != "OK" else "Schema Validation Fail",
+                details=f"Trend {r.trend}% (Cost/call: ${r.cost:.4f})",
+                actionLabel="Enforce Hard Block" if r.action != "OK" else "Notify Team",
+                actionColor="red" if r.action != "OK" else "blue",
+            )
+        )
+
+    return FigmaApiMonitoringResponse(
+        totalApiCallsLabel=_k_label(total_calls),
+        blockedThreatsLabel=f"{blocked:,}",
+        globalAvailabilityLabel="99.98%",
+        activeIncidentsLabel=f"{active_incidents} Critical",
+        apiOveruseByTargetApp=overuse,
+        mostAbusedEndpoints=abused,
+        topConsumersByTargetApp=top_consumers,
+        activeMitigationFeed=mitigation_feed,
+    )
+
+
+async def get_figma_network_traffic(env: str, db: AsyncSession) -> FigmaNetworkTrafficResponse:
+    result = await db.execute(
+        select(NetworkLog).where(NetworkLog.env == env).order_by(NetworkLog.timestamp.desc()).limit(50)
+    )
+    logs = result.scalars().all()
+    rows: List[FigmaNetworkAnomalyRow] = []
+    for l in logs:
+        source = _format_external_ip(l.source_ip)
+        controls: List[Dict[str, str]]
+        if "scan" in (l.anomaly_type or "").lower():
+            controls = [
+                {"label": "Drop Connection", "type": "warning"},
+                {"label": "Quarantine Laptop", "type": "critical"},
+            ]
+        elif "ssh" in (l.anomaly_type or "").lower():
+            controls = [{"label": "Trace IP Origin", "type": "trace"}]
+        else:
+            controls = [{"label": "Throttle Endpoint", "type": "orange"}]
+
+        rows.append(
+            FigmaNetworkAnomalyRow(
+                timestamp=(l.timestamp or "")[-8:] if l.timestamp else "—",
+                source=source,
+                targetApp=l.app or l.target_app,
+                port=str(l.port or 0),
+                anomalyType=l.anomaly_type,
+                firewallBlockActive=(l.severity == "Low" and "block" in (l.anomaly_type or "").lower()),
+                controls=controls,
+            )
+        )
+    return FigmaNetworkTrafficResponse(activeAnomalies=rows)
+
+
+async def get_figma_endpoint_security(env: str, db: AsyncSession) -> FigmaEndpointSecurityResponse:
+    result = await db.execute(
+        select(EndpointLog).where(EndpointLog.env == env).order_by(EndpointLog.id.desc()).limit(200)
+    )
+    logs = result.scalars().all()
+
+    ws_counts: Dict[str, int] = defaultdict(int)
+    user_violations: Dict[str, int] = defaultdict(int)
+    for l in logs:
+        ws_counts[l.workstation_id] += 1
+        user_violations[l.employee or "unknown"] += 1
+
+    vuln: List[FigmaEndpointVulnerableRow] = []
+    for ws, cnt in sorted(ws_counts.items(), key=lambda x: -x[1])[:8]:
+        risk = "Low"
+        if cnt >= 10:
+            risk = "Critical"
+        elif cnt >= 7:
+            risk = "High"
+        elif cnt >= 4:
+            risk = "Medium"
+        vuln.append(FigmaEndpointVulnerableRow(workstationId=ws, cves=cnt, riskLevel=risk))
+
+    violators = [
+        FigmaEndpointPolicyViolatorRow(user=u, violations=v)
+        for u, v in sorted(user_violations.items(), key=lambda x: -x[1])[:8]
+    ]
+
+    events: List[FigmaEndpointEventRow] = []
+    for i, l in enumerate(logs[:15]):
+        sev = "warning"
+        if l.severity == "Critical":
+            sev = "critical"
+        elif l.severity == "High":
+            sev = "high"
+
+        msg = (l.alert_message or "").lower()
+        actions = [FigmaEndpointEventAction(label="Quarantine Device", actionType="Quarantine Device")]
+        if "usb" in msg:
+            actions = [FigmaEndpointEventAction(label="Lock USB Ports", actionType="Lock USB Ports")]
+        elif "process" in msg or "malware" in msg:
+            actions = [
+                FigmaEndpointEventAction(label="Kill Process", actionType="Kill Process"),
+                FigmaEndpointEventAction(label="Quarantine Device", actionType="Quarantine Device"),
+            ]
+
+        events.append(
+            FigmaEndpointEventRow(
+                id=str(i + 1),
+                endpoint=l.workstation_id,
+                user=l.employee or "unknown",
+                threat=l.alert_message,
+                severity=sev,
+                timestamp=(l.timestamp or "")[-8:] if l.timestamp else "—",
+                actions=actions,
+            )
+        )
+
+    return FigmaEndpointSecurityResponse(vulnerableEndpoints=vuln, policyViolators=violators, endpointEvents=events)
+
+
+async def get_figma_database_monitoring(env: str, db: AsyncSession) -> FigmaDatabaseMonitoringResponse:
+    data = await get_db_monitoring(env, db)
+
+    exfil: List[FigmaDbExfiltrationRow] = []
+    for idx, row in enumerate(data.dlpByTargetApp[:8]):
+        color = "#3b82f6"
+        if idx == 0:
+            color = "#ef4444"
+        elif idx == 1:
+            color = "#f97316"
+        elif idx == 2:
+            color = "#eab308"
+        exfil.append(FigmaDbExfiltrationRow(targetDb=row.app, volumeGb=float(row.count), color=color))
+
+    src_counts: Dict[str, int] = defaultdict(int)
+    for s in data.suspiciousActivity:
+        src_counts[s.user] += 1
+    suspicious_sources = [
+        FigmaDbSuspiciousSourceRow(name=name, queries=count)
+        for name, count in sorted(src_counts.items(), key=lambda x: -x[1])[:8]
+    ]
+
+    suspicious_activity = [
+        FigmaDbSuspiciousActivityRow(
+            id=s.id,
+            timestamp="—",
+            actor=s.user,
+            targetDb=s.app,
+            targetTable=s.table,
+            risk=f"{s.type}: {s.reason}",
+        )
+        for s in data.suspiciousActivity[:25]
+    ]
+
+    return FigmaDatabaseMonitoringResponse(
+        dataExfiltrationRiskByDatabase=exfil,
+        topSuspiciousQuerySources=suspicious_sources,
+        suspiciousDbActivity=suspicious_activity,
+    )

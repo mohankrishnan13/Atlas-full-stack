@@ -12,7 +12,35 @@ import {
 import { apiGet, apiPost, ApiError } from '@/lib/api';
 import { useEnvironment } from '@/context/EnvironmentContext';
 import { toast } from 'sonner';
-import type { ApiMonitoringData } from '@/lib/types';
+type FigmaApiOveruseByApp = { targetApp: string; currentRpm: number; limitRpm: number };
+type FigmaAbusedEndpointRow = { endpoint: string; violations: number; severity: 'critical' | 'high' | 'medium' };
+type FigmaTopConsumerRow = {
+  consumer: string;
+  targetApp: string;
+  callsLabel: string;
+  costLabel: string;
+  isOveruse: boolean;
+  actionLabel: string;
+  actionType: 'warning' | 'critical' | 'neutral';
+};
+type FigmaApiMitigationFeedRow = {
+  target: string;
+  offender: string;
+  violation: string;
+  details: string;
+  actionLabel: string;
+  actionColor: 'red' | 'blue';
+};
+type FigmaApiMonitoringResponse = {
+  totalApiCallsLabel: string;
+  blockedThreatsLabel: string;
+  globalAvailabilityLabel: string;
+  activeIncidentsLabel: string;
+  apiOveruseByTargetApp: FigmaApiOveruseByApp[];
+  mostAbusedEndpoints: FigmaAbusedEndpointRow[];
+  topConsumersByTargetApp: FigmaTopConsumerRow[];
+  activeMitigationFeed: FigmaApiMitigationFeedRow[];
+};
 
 function ChartTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
@@ -68,13 +96,13 @@ function LoadingSkeleton() {
 }
 
 export default function ApiMonitoringPage() {
-  const [data, setData] = useState<ApiMonitoringData | null>(null);
+  const [data, setData] = useState<FigmaApiMonitoringResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const { environment } = useEnvironment();
 
   useEffect(() => {
     setLoading(true);
-    apiGet<ApiMonitoringData>(`/api-monitoring`)
+    apiGet<FigmaApiMonitoringResponse>(`/figma/api-monitoring`)
       .then(setData)
       .catch((err) => {
         toast.error('Failed to load API monitoring data.', {
@@ -102,53 +130,44 @@ export default function ApiMonitoringPage() {
     </div>
   );
 
-  // Map apiConsumptionByApp → overuse chart
-  const overuseData = data.apiConsumptionByApp.map((a) => ({
-    app: a.app,
-    current: a.actual,
-    limit: a.limit,
+  const overuseData = data.apiOveruseByTargetApp.map((a) => ({
+    app: a.targetApp,
+    current: a.currentRpm,
+    limit: a.limitRpm,
   }));
 
-  // Map apiRouting → abused endpoints (sorted by cost descending)
-  const abusedEndpoints = [...data.apiRouting]
-    .sort((a, b) => b.cost - a.cost)
-    .slice(0, 6)
-    .map((r) => ({
-      endpoint: `[${r.app}] ${r.path}`,
-      count: Math.round(r.cost * 100),
-      severity: r.action === 'Blocked' ? 'critical' : r.action === 'Rate-Limited' ? 'high' : 'medium',
-    }));
+  const abusedEndpoints = data.mostAbusedEndpoints.map((r) => ({
+    endpoint: r.endpoint,
+    count: r.violations,
+    severity: r.severity,
+  }));
 
-  // Top consumers table
-  const topConsumers = [...data.apiRouting]
-    .sort((a, b) => b.cost - a.cost)
-    .slice(0, 5)
-    .map((r) => ({
-      consumer: r.app.toLowerCase().replace(/ /g, '_') + '_service',
-      app: `[${r.app}]`,
-      calls: `${Math.round(r.cost * 40)}K`,
-      cost: `$${r.cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      isOveruse: r.trend > 0,
-      actionLabel: r.action === 'Blocked' ? 'View Block' : r.action === 'Rate-Limited' ? 'Review Quota' : 'Audit Logs',
-      actionType: r.action === 'Blocked' ? 'critical' : r.action === 'Rate-Limited' ? 'warning' : 'neutral',
-      path: r.path,
-    }));
+  const topConsumers = data.topConsumersByTargetApp.map((r) => ({
+    consumer: r.consumer,
+    app: r.targetApp,
+    calls: r.callsLabel,
+    cost: r.costLabel,
+    isOveruse: r.isOveruse,
+    actionLabel: r.actionLabel,
+    actionType: r.actionType,
+    path: '/unknown',
+  }));
 
-  // Active mitigation feed: routes that aren't OK
-  const mitigationFeed = data.apiRouting
-    .filter((r) => r.action !== 'OK')
-    .map((r) => ({
-      target: `[${r.app}]`,
-      offender: r.app.toLowerCase().replace(/ /g, '_') + '_bot',
-      violation: r.action === 'Blocked' ? 'Hard Blocked Route' : 'Rate Limit Exceeded',
-      details: `${r.method} ${r.path} — trend: ${r.trend > 0 ? '+' : ''}${r.trend}%`,
-      actionLabel: r.action === 'Blocked' ? 'View Policy' : 'Enforce Hard Block',
-      actionColor: r.action === 'Blocked' ? 'blue' : 'red',
-      app: r.app,
-      path: r.path,
-    }));
+  const mitigationFeed = data.activeMitigationFeed.map((r) => ({
+    target: r.target,
+    offender: r.offender,
+    violation: r.violation,
+    details: r.details,
+    actionLabel: r.actionLabel,
+    actionColor: r.actionColor,
+    app: r.target.replace('[', '').replace(']', ''),
+    path: '/unknown',
+  }));
 
-  const criticalIncidents = data.apiRouting.filter((r) => r.action === 'Blocked').length;
+  const criticalIncidents = (() => {
+    const m = data.activeIncidentsLabel.match(/(\d+)/);
+    return m ? Number(m[1]) : 0;
+  })();
 
   return (
     <div className="space-y-6">
@@ -159,11 +178,11 @@ export default function ApiMonitoringPage() {
 
       {/* Stat Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <StatCard value={`${(data.apiCallsToday / 1000000).toFixed(1)}M`} label="Total API Calls" icon={Activity} />
-        <StatCard value={data.blockedRequests.toLocaleString()} label="Blocked Threats" color="red" icon={Ban} />
+        <StatCard value={data.totalApiCallsLabel} label="Total API Calls" icon={Activity} />
+        <StatCard value={data.blockedThreatsLabel} label="Blocked Threats" color="red" icon={Ban} />
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 flex items-center justify-between">
           <div>
-            <div className="text-2xl font-bold text-slate-100">99.98%</div>
+            <div className="text-2xl font-bold text-slate-100">{data.globalAvailabilityLabel}</div>
             <div className="text-sm text-slate-400 mt-0.5">Global Availability</div>
           </div>
           <TrendingUp className="w-8 h-8 text-emerald-500 opacity-60" />
@@ -171,7 +190,7 @@ export default function ApiMonitoringPage() {
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 flex items-center justify-between">
           <div>
             <div className="text-2xl font-bold text-orange-400">
-              {criticalIncidents > 0 ? `${criticalIncidents} Critical` : 'None'}
+              {data.activeIncidentsLabel}
             </div>
             <div className="text-sm text-slate-400 mt-0.5">Active Incidents</div>
           </div>

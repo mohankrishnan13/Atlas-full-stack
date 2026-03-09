@@ -41,6 +41,7 @@ from app.api.routes_ingest import router as ingest_router
 from app.api.routes_reports import router as reports_router
 from app.api.routes_settings import router as settings_router
 from app.api.routes_webhooks import router as webhook_router
+from app.api.routes_figma_widgets import router as figma_widgets_router
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal, close_db, create_all_tables
 from app.services.auth_service import seed_default_admin
@@ -171,6 +172,7 @@ app.include_router(settings_router)     # GET/POST /settings/*
 app.include_router(figma_settings_router)  # GET/PUT /api/settings/apps/*
 app.include_router(reports_router)         # GET/POST /reports/*
 app.include_router(case_management_router) # GET /case-management
+app.include_router(figma_widgets_router)   # GET /figma/*
 
 
 # ── Global Exception Handler ──────────────────────────────────────────────────

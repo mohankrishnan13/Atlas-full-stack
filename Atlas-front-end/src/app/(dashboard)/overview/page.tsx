@@ -14,6 +14,18 @@ import { useEnvironment } from '@/context/EnvironmentContext';
 import { toast } from 'sonner';
 import type { OverviewData } from '@/lib/types';
 
+type FigmaDashboardAppHealth = {
+  targetApp: string;
+  currentLoadLabel: string;
+  status: 'healthy' | 'warning' | 'critical';
+  actionLabel: string;
+};
+
+type FigmaDashboardResponse = {
+  aiBriefing: string;
+  appHealth: FigmaDashboardAppHealth[];
+};
+
 // ─── Tooltip ────────────────────────────────────────────────────────────────
 function ChartTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
@@ -106,19 +118,34 @@ function LoadingSkeleton() {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function OverviewPage() {
   const [data, setData] = useState<OverviewData | null>(null);
+  const [figma, setFigma] = useState<FigmaDashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const { environment } = useEnvironment();
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
-    apiGet<OverviewData>(`/overview`)
-      .then(setData)
+    Promise.all([
+      apiGet<OverviewData>(`/overview`),
+      apiGet<FigmaDashboardResponse>(`/figma/dashboard`),
+    ])
+      .then(([ov, dash]) => {
+        if (cancelled) return;
+        setData(ov);
+        setFigma(dash);
+      })
       .catch((err) => {
         toast.error('Failed to load overview data.', {
           description: err instanceof ApiError ? err.message : 'Request failed.',
         });
+        if (!cancelled) {
+          setData(null);
+          setFigma(null);
+        }
       })
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+
+    return () => { cancelled = true; };
   }, [environment]);
 
   const handleMitigate = async (app: string, path = '/*') => {
@@ -139,21 +166,27 @@ export default function OverviewPage() {
     </div>
   );
 
-  // Map microservices to app health cards
-  const appCards = data.microservices.slice(0, 3).map((svc) => {
-    const reqData = data.apiRequestsByApp.find((a) =>
-      a.app.toLowerCase().includes(svc.name.toLowerCase().split('-')[0])
-    );
-    const load = reqData
-      ? `${reqData.requests.toLocaleString()} req/m`
-      : svc.connections.length > 0
-        ? `${svc.connections.length * 150} req/m`
-        : 'Idle';
-    const status: 'critical' | 'warning' | 'healthy' =
-      svc.status === 'Failing' ? 'critical' : svc.status === 'Degraded' ? 'warning' : 'healthy';
-    const actionLabel = status === 'critical' ? 'Apply Hard Limit' : status === 'warning' ? 'Isolate DB' : 'View Traffic';
-    return { svc, load, status, actionLabel };
-  });
+  const appCards =
+    figma?.appHealth?.length
+      ? figma.appHealth.map((row, idx) => ({
+          id: `${idx}`,
+          appName: row.targetApp,
+          load: row.currentLoadLabel,
+          status: row.status,
+          actionLabel: row.actionLabel,
+        }))
+      : data.microservices.slice(0, 3).map((svc) => {
+          const reqData = data.apiRequestsByApp.find((a) =>
+            a.app.toLowerCase().includes(svc.name.toLowerCase().split('-')[0])
+          );
+          const load = reqData
+            ? `${reqData.requests.toLocaleString()} req/m`
+            : `${Math.max(0, svc.connections.length) * 150} req/m`;
+          const status: 'critical' | 'warning' | 'healthy' =
+            svc.status === 'Failing' ? 'critical' : svc.status === 'Degraded' ? 'warning' : 'healthy';
+          const actionLabel = status === 'critical' ? 'Apply Hard Limit' : status === 'warning' ? 'Isolate DB' : 'View Traffic';
+          return { id: svc.id, appName: svc.name, load, status, actionLabel };
+        });
 
   // Anomaly bar chart data: app anomalies
   const anomalyChartData = data.appAnomalies.slice(0, 6);
@@ -180,10 +213,7 @@ export default function OverviewPage() {
               <span className="text-[10px] bg-indigo-500/15 text-indigo-300 px-2 py-0.5 rounded border border-indigo-500/20">LIVE</span>
             </div>
             <div className="text-[11px] text-slate-300 mt-1 leading-relaxed">
-              Detected <span className="text-red-400 font-semibold">abnormal API consumption</span> on{' '}
-              <span className="text-slate-100 font-semibold">GenAI Service</span> targeting expensive models. Prevented{' '}
-              <span className="text-yellow-300 font-semibold">lateral movement</span> from <span className="font-mono">LAPTOP-DEV-09</span> towards production DBs.
-              System has automatically applied throttling to non-critical endpoints.
+              {figma?.aiBriefing ?? ''}
             </div>
           </div>
         </div>
@@ -196,14 +226,14 @@ export default function OverviewPage() {
           <h2 className="text-sm font-semibold text-slate-100">App-Specific Health Matrix</h2>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {appCards.map(({ svc, load, status, actionLabel }) => (
+          {appCards.map(({ id, appName, load, status, actionLabel }) => (
             <AppHealthCard
-              key={svc.id}
-              appName={svc.name}
+              key={id}
+              appName={appName}
               load={load}
               status={status}
               actionLabel={actionLabel}
-              onAction={() => handleMitigate(svc.name)}
+              onAction={() => handleMitigate(appName)}
             />
           ))}
         </div>

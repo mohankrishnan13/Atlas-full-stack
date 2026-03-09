@@ -18,14 +18,16 @@ const getToken = (): string | null =>
   typeof window !== 'undefined' ? localStorage.getItem('atlas_auth_token') : null;
 
 // ── NEW: Environment State Manager ──
-export const getActiveEnv = (): string =>
-  typeof window !== 'undefined' ? localStorage.getItem('atlas_active_env') || 'cloud' : 'cloud';
+export type AtlasEnv = 'cloud' | 'local';
 
-export const setActiveEnv = (env: 'cloud' | 'local') => {
+export const getActiveEnv = (): AtlasEnv =>
+  typeof window !== 'undefined'
+    ? ((localStorage.getItem('atlas_active_env') as AtlasEnv | null) || 'cloud')
+    : 'cloud';
+
+export const setActiveEnv = (env: AtlasEnv) => {
   if (typeof window !== 'undefined') {
     localStorage.setItem('atlas_active_env', env);
-    // Reload the page to ensure all components fetch the new environment data
-    window.location.reload(); 
   }
 };
 
