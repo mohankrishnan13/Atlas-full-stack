@@ -11,8 +11,9 @@ import { Input } from '@/components/ui/input';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { AuthCard } from '@/components/auth/auth-card';
 import { LoaderCircle, AlertCircle } from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
+import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { apiPost } from '@/lib/api';
 
 const signupSchema = z.object({
   fullName: z.string().min(1, { message: 'Full name is required.' }),
@@ -29,7 +30,6 @@ type SignupFormValues = z.infer<typeof signupSchema>;
 
 export default function SignupPage() {
   const router = useRouter();
-  const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
 
@@ -48,31 +48,21 @@ export default function SignupPage() {
     setIsLoading(true);
     setApiError(null);
     try {
-        const response = await fetch(`${process.env.NEXT_PUBLIC_ATLAS_BACKEND_URL}/api/auth/signup`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                full_name: data.fullName,
-                email: data.email,
-                company_name: data.companyName,
-                password: data.password
-            }),
+        await apiPost('/api/auth/signup', {
+          full_name: data.fullName,
+          email: data.email,
+          company_name: data.companyName,
+          password: data.password,
         });
-        
-        if (response.status === 201) {
-            toast({
-                title: 'Account Request Submitted',
-                description: 'Your account has been created. Please sign in.',
-            });
-            router.push('/login');
-        } else {
-            const errorResult = await response.json().catch(() => ({ detail: 'An unknown error occurred during signup.' }));
-            setApiError(errorResult.detail || 'An unknown error occurred.');
-        }
+
+        toast.success('Account Request Submitted', {
+          description: 'Your account has been created. Please sign in.',
+        });
+        router.push('/login');
 
     } catch (error) {
         console.error("Signup API error:", error);
-        setApiError('Could not connect to the server. Please try again later.');
+        setApiError(error instanceof Error ? error.message : 'Could not connect to the server. Please try again later.');
     } finally {
         setIsLoading(false);
     }

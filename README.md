@@ -50,6 +50,11 @@ docker compose up --build
 - **API docs:** http://localhost:8000/docs  
 - **Health:** http://localhost:8000/health  
 
+**How data works in this release (source of truth):**
+
+- **Applications catalog:** Stored in PostgreSQL (see `ApplicationRow`), returned by `GET /header-data`.
+- **Logs:** Sample JSONL files in `Atlas-back-end/data/logs/` are ingested into PostgreSQL on backend startup (controlled by `REINGEST_ON_STARTUP`). All dashboard endpoints query PostgreSQL.
+
 **Generate secrets:**
 ```bash
 python -c "import secrets; print(secrets.token_hex(32))"   # SECRET_KEY / VELOCIRAPTOR_WEBHOOK_SECRET
@@ -73,7 +78,11 @@ docker compose up --build atlas-frontend  # rebuild frontend
 ## 3. Architecture & Stack
 
 - **Browser** (port 3000) → Next.js dashboard; all API calls go to **FastAPI** (port 8000) with JWT.
-- **FastAPI** → asyncpg → **PostgreSQL 16**. Ingest: Vector/Fluent Bit → `POST /api/ingest/http`; S3 cold path (optional); Velociraptor → `POST /webhooks/velociraptor`.
+- **FastAPI** → asyncpg → **PostgreSQL 16**.
+  - **Current (MVP) ingest:** JSONL files from `Atlas-back-end/data/logs/` → Postgres on startup.
+  - **Near-real-time ingest (available now):** Vector/Fluent Bit → `POST /api/ingest/http`.
+  - **Optional cold-path replay:** S3 poller (disabled by default).
+  - **Endpoint telemetry (future-ready):** Velociraptor → `POST /webhooks/velociraptor`.
 
 **Backend:** FastAPI, Uvicorn, SQLAlchemy (async), asyncpg, Pydantic v2, python-jose (JWT), passlib (bcrypt), boto3, httpx.  
 **Frontend:** Next.js 15, React 19, TypeScript, Tailwind, shadcn/ui, Recharts, React Hook Form + Zod, Genkit (Gemini).  
@@ -104,6 +113,12 @@ Atlas-full-stack/
 
 **DB tables:** `network_logs`, `api_logs`, `endpoint_logs`, `db_activity_logs`, `incidents`, `alerts`, `atlas_users`, `user_sessions`, `s3_ingest_cursor`. All log tables have `env` (cloud/local) and `raw_payload` JSONB.
 
+**Applications (source of truth):**
+
+- The app selector on the frontend is populated from `GET /header-data`.
+- `GET /header-data` returns applications from the DB (see `ApplicationRow` filtered by `env`).
+- The frontend does not hardcode app names; whatever apps your company has deployed should be represented by rows in PostgreSQL.
+
 **Dashboard GETs** (all support `?env=cloud|local`): `/overview`, `/api-monitoring`, `/network-traffic`, `/endpoint-security`, `/db-monitoring`, `/incidents`, `/header-data`, `/users`, `/health`.
 
 **Mitigation / actions:**  
@@ -113,13 +128,28 @@ Atlas-full-stack/
 
 **Ingest:** `POST /api/ingest/http` (API key header; batch JSON array or `{ "logs": [...] }`). **Webhook:** `POST /webhooks/velociraptor` (HMAC-verified). **Settings:** `GET|POST|PATCH|DELETE /settings/containment-rules`.
 
-**Data sources:** MVP ingests JSONL from `data/logs/` on startup (`REINGEST_ON_STARTUP`). Production: Vector → `/api/ingest/http`; optional S3 poll; Velociraptor webhooks.
+**Data sources (current vs future):**
+
+- **Current (this release):** JSONL in `Atlas-back-end/data/logs/` is ingested into PostgreSQL on backend startup by `app/services/log_ingestion.py`.
+  - Controlled by `REINGEST_ON_STARTUP` (recommended `true` for development; set `false` to preserve DB data across restarts).
+  - The ingest reads:
+    - `network_logs.jsonl`
+    - `api_logs.jsonl`
+    - `endpoint_logs.jsonl`
+    - `db_activity_logs.jsonl`
+    - `incidents.jsonl`
+    - `alerts.jsonl`
+- **Available now (future-friendly):** `POST /api/ingest/http` accepts batches from shippers such as Vector/Fluent Bit/Logstash.
+- **Optional:** S3 replay ingestor (disabled by default).
+- **Future:** Velociraptor webhook ingestion for endpoint events.
 
 ---
 
 ## 6. Frontend (Next.js)
 
 **Data:** All dashboard data from FastAPI via `src/lib/api.ts` (`apiGet`, `apiPost`, `apiPut`, `apiDelete`). JWT from `localStorage` (`atlas_auth_token`); 401 triggers logout and redirect. No mock data.
+
+**Apps are backend-driven:** the header app selector uses the DB-backed list from `GET /header-data`. This supports the real enterprise use case where multiple internal apps are deployed in cloud environments.
 
 **Pages:** Overview (KPIs, app anomalies, microservice topology, API requests by app, system anomalies); API Monitoring (consumption by app, routing table, Apply Hard Block); Network (anomalies by app & by source IP, Apply Hard Block); Endpoint (OS/alert charts, alerts by hostname, Quarantine Device); Database (operations by app, DLP by app, Kill Query); Incidents (list, AI investigator sheet, Block IP / Isolate / Dismiss); Profile (edit, password, 2FA, sessions); Settings (user access, containment, etc.); Reports.
 
@@ -170,6 +200,14 @@ Change these after first login in any non-local environment.
 
 - **Velociraptor:** Deploy server; create Server Event Artifact that POSTs to `/webhooks/velociraptor` with HMAC; deploy agents (MSI/DEB). Backend already accepts and verifies webhooks.
 - **Live streams:** Replace file ingestion with Kafka consumer (`aiokafka`) or Syslog UDP listener for high-throughput or on-prem.
+- **Cloud log shipping:** Replace JSONL startup ingestion with a shipper-based pipeline.
+  - **Agent-based shippers:** Vector / Fluent Bit / Filebeat running on nodes, clusters, or VMs.
+  - **Transport:** HTTP ingest (`/api/ingest/http`) now, Kafka later, or direct to a log store.
+  - **Storage:** Postgres for SOC dashboard queries; optionally OpenSearch/Elasticsearch for long retention/search.
+- **Kibana / Elastic stack (future release):**
+  - Keep ATLAS as the analyst workflow + action layer.
+  - Use Elasticsearch/OpenSearch + Kibana for exploratory search, dashboards, and long-term retention.
+  - Add connectors so ATLAS can correlate anomalies/incidents with deep Kibana links.
 - **Hardening:** Alembic migrations; JWT refresh tokens; token revocation (e.g. Redis); full TOTP 2FA (pyotp + QR); rate limiting (e.g. slowapi); CORS allowlist; Prometheus/OpenTelemetry; Kubernetes with secrets.
 - **AI:** Genkit flows (daily briefing, investigator) require `GOOGLE_GENAI_API_KEY` if used.
 

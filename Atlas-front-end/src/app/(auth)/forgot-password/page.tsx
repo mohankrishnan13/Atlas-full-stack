@@ -11,7 +11,8 @@ import { Input } from '@/components/ui/input';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { AuthCard } from '@/components/auth/auth-card';
 import { LoaderCircle } from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
+import { toast } from 'sonner';
+import { apiPost } from '@/lib/api';
 
 const forgotPasswordSchema = z.object({
   email: z.string().email({ message: 'Please enter a valid email address.' }),
@@ -21,7 +22,6 @@ type ForgotPasswordFormValues = z.infer<typeof forgotPasswordSchema>;
 
 export default function ForgotPasswordPage() {
   const router = useRouter();
-  const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
 
   const form = useForm<ForgotPasswordFormValues>({
@@ -34,20 +34,15 @@ export default function ForgotPasswordPage() {
   const onSubmit = async (data: ForgotPasswordFormValues) => {
     setIsLoading(true);
     try {
-        const response = await fetch(`${process.env.NEXT_PUBLIC_ATLAS_BACKEND_URL}/api/auth/forgot-password`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: data.email }),
-        });
+        await apiPost('/api/auth/forgot-password', { email: data.email });
         // We always show a generic message to prevent email enumeration
     } catch (error) {
         console.error("Forgot password error:", error);
         // Still show a generic message on network error
     } finally {
         setIsLoading(false);
-        toast({
-            title: "Password Reset Link Sent",
-            description: "If an account exists with that email, a reset link has been sent.",
+        toast.success("Password Reset Link Sent", {
+          description: "If an account exists with that email, a reset link has been sent.",
         });
         router.push('/login');
     }

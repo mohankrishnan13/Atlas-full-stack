@@ -69,6 +69,91 @@ class Microservice(Base):
         Index("uq_microservices_env_service_id", "env", "service_id", unique=True),
     )
 
+
+class AppConfig(Base):
+    __tablename__ = "app_configs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    app_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+
+    # Alert tuning
+    warning_anomaly_score: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    critical_anomaly_score: Mapped[int] = mapped_column(Integer, nullable=False, default=80)
+
+    # Progressive containment
+    soft_rate_limit_calls_per_min: Mapped[int] = mapped_column(Integer, nullable=False, default=800)
+    hard_block_threshold_calls_per_min: Mapped[int] = mapped_column(Integer, nullable=False, default=3000)
+    auto_quarantine_laptops: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # ML baselines
+    training_window_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    model_sensitivity_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=58)
+    auto_update_baselines_weekly: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    baseline_model_name: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    baseline_last_updated_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+
+    updated_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        Index("uq_app_configs_env_app", "env", "app_id", unique=True),
+    )
+
+
+class QuarantinedEndpoint(Base):
+    __tablename__ = "quarantined_endpoints"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    app_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    workstation_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    user_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    quarantined_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+    lifted_at: Mapped[str] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="Active", index=True)
+    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    __table_args__ = (
+        Index("ix_quarantined_endpoints_env_app", "env", "app_id"),
+        Index("ix_quarantined_endpoints_env_status", "env", "status"),
+    )
+
+
+class ScheduledReport(Base):
+    __tablename__ = "scheduled_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(256), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    target_app_scope: Mapped[str] = mapped_column(String(256), nullable=False, default="All Sources")
+    schedule: Mapped[str] = mapped_column(String(128), nullable=False, default="Every Monday at 8:00 AM")
+    template: Mapped[str] = mapped_column(String(256), nullable=False, default="General Security Summary")
+    export_format: Mapped[str] = mapped_column(String(32), nullable=False, default="PDF")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        Index("ix_scheduled_reports_env_enabled", "env", "enabled"),
+    )
+
+
+class ReportDownload(Base):
+    __tablename__ = "report_downloads"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    file_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    target_app_scope: Mapped[str] = mapped_column(String(256), nullable=False, default="All Sources")
+    generated_at_label: Mapped[str] = mapped_column(String(64), nullable=False, default="Today")
+    size_label: Mapped[str] = mapped_column(String(64), nullable=False, default="0 KB")
+    download_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    created_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        Index("ix_report_downloads_env_created", "env", "created_at"),
+    )
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Atlas Users (Unified Authentication & RBAC)
 # ─────────────────────────────────────────────────────────────────────────────

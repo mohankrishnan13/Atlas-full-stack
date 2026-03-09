@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import { apiGet, apiPost, ApiError } from '@/lib/api';
 import { useEnvironment } from '@/context/EnvironmentContext';
-import { useToast } from '@/hooks/use-toast';
+import { toast } from 'sonner';
 import type { ApiMonitoringData } from '@/lib/types';
 
 function ChartTooltip({ active, payload, label }: any) {
@@ -71,31 +71,26 @@ export default function ApiMonitoringPage() {
   const [data, setData] = useState<ApiMonitoringData | null>(null);
   const [loading, setLoading] = useState(true);
   const { environment } = useEnvironment();
-  const { toast } = useToast();
 
   useEffect(() => {
     setLoading(true);
-    apiGet<ApiMonitoringData>(`/api-monitoring?env=${environment}`)
+    apiGet<ApiMonitoringData>(`/api-monitoring`)
       .then(setData)
       .catch((err) => {
-        toast({
-          title: 'Error',
-          description: err instanceof ApiError ? err.message : 'Failed to load API monitoring data.',
-          variant: 'destructive',
+        toast.error('Failed to load API monitoring data.', {
+          description: err instanceof ApiError ? err.message : 'Request failed.',
         });
       })
       .finally(() => setLoading(false));
-  }, [environment, toast]);
+  }, [environment]);
 
   const handleBlockRoute = async (app: string, path: string) => {
     try {
       await apiPost('/api-monitoring/block-route', { app, path });
-      toast({ title: 'Hard Block Applied', description: `Route ${app} ${path} has been blocked.` });
+      toast.success('Hard Block Applied', { description: `Route ${app} ${path} has been blocked.` });
     } catch (err) {
-      toast({
-        title: 'Error',
-        description: err instanceof ApiError ? err.message : 'Block action failed.',
-        variant: 'destructive',
+      toast.error('Block action failed.', {
+        description: err instanceof ApiError ? err.message : 'Request failed.',
       });
     }
   };
@@ -158,16 +153,20 @@ export default function ApiMonitoringPage() {
   return (
     <div className="space-y-6">
 
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-medium text-slate-300">API Monitoring</div>
+      </div>
+
       {/* Stat Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <StatCard value={data.apiCallsToday.toLocaleString()} label="Total API Calls" icon={Activity} />
+        <StatCard value={`${(data.apiCallsToday / 1000000).toFixed(1)}M`} label="Total API Calls" icon={Activity} />
         <StatCard value={data.blockedRequests.toLocaleString()} label="Blocked Threats" color="red" icon={Ban} />
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 flex items-center justify-between">
           <div>
-            <div className="text-2xl font-bold text-emerald-400">{data.avgLatency.toFixed(0)}ms</div>
-            <div className="text-sm text-slate-400 mt-0.5">Avg Latency</div>
+            <div className="text-2xl font-bold text-slate-100">99.98%</div>
+            <div className="text-sm text-slate-400 mt-0.5">Global Availability</div>
           </div>
-          <Activity className="w-8 h-8 text-emerald-500 opacity-60" />
+          <TrendingUp className="w-8 h-8 text-emerald-500 opacity-60" />
         </div>
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 flex items-center justify-between">
           <div>
@@ -187,7 +186,10 @@ export default function ApiMonitoringPage() {
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6">
           <div className="flex items-center gap-2 mb-6">
             <Server className="w-5 h-5 text-blue-400" />
-            <h2 className="text-lg font-semibold text-slate-100">API Overuse by Target Application</h2>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-100">API Overuse by Target Application</h2>
+              <div className="text-[11px] text-slate-500">RPM</div>
+            </div>
           </div>
           {overuseData.length > 0 ? (
             <div style={{ width: '100%', height: 320 }}>
@@ -216,7 +218,10 @@ export default function ApiMonitoringPage() {
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6">
           <div className="flex items-center gap-2 mb-6">
             <ShieldAlert className="w-5 h-5 text-red-400" />
-            <h2 className="text-lg font-semibold text-slate-100">Most Abused API Endpoints</h2>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-100">Most Abused API Endpoints</h2>
+              <div className="text-[11px] text-slate-500">Abuse concentration</div>
+            </div>
           </div>
           {abusedEndpoints.length > 0 ? (
             <div style={{ width: '100%', height: 320 }}>

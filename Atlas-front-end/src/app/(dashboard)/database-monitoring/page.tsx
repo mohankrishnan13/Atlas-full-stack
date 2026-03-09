@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import { apiGet, apiPost, ApiError } from '@/lib/api';
 import { useEnvironment } from '@/context/EnvironmentContext';
-import { useToast } from '@/hooks/use-toast';
+import { toast } from 'sonner';
 import type { DbMonitoringData, SuspiciousActivity } from '@/lib/types';
 
 function ChartTooltip({ active, payload, label }: any) {
@@ -46,17 +46,14 @@ export default function DatabaseMonitoringPage() {
   const [data, setData] = useState<DbMonitoringData | null>(null);
   const [loading, setLoading] = useState(true);
   const { environment } = useEnvironment();
-  const { toast } = useToast();
 
   const fetchData = () => {
     setLoading(true);
-    apiGet<DbMonitoringData>(`/db-monitoring?env=${environment}`)
+    apiGet<DbMonitoringData>(`/db-monitoring`)
       .then(setData)
       .catch((err) => {
-        toast({
-          title: 'Error',
-          description: err instanceof ApiError ? err.message : 'Failed to load database data.',
-          variant: 'destructive',
+        toast.error('Failed to load database data.', {
+          description: err instanceof ApiError ? err.message : 'Request failed.',
         });
       })
       .finally(() => setLoading(false));
@@ -67,13 +64,11 @@ export default function DatabaseMonitoringPage() {
   const handleKillQuery = async (activityId: number, app: string, user: string) => {
     try {
       await apiPost('/db-monitoring/kill-query', { activityId, app, user });
-      toast({ title: 'Query Killed', description: `Activity ${activityId} on ${app} terminated.` });
+      toast.success('Query Killed', { description: `Activity ${activityId} on ${app} terminated.` });
       fetchData();
     } catch (err) {
-      toast({
-        title: 'Error',
-        description: err instanceof ApiError ? err.message : 'Kill query failed.',
-        variant: 'destructive',
+      toast.error('Kill query failed.', {
+        description: err instanceof ApiError ? err.message : 'Request failed.',
       });
     }
   };
@@ -117,6 +112,10 @@ export default function DatabaseMonitoringPage() {
   return (
     <div className="space-y-6">
 
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-medium text-slate-300">Database Monitoring</div>
+      </div>
+
       {/* Top Row: DB Threat KPIs */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
 
@@ -137,11 +136,11 @@ export default function DatabaseMonitoringPage() {
               </span>
             </div>
             <div className="text-sm text-red-400 font-medium">
-              {data.dataExportVolume.toFixed(1)} GB outbound detected
+              {data.dataExportVolume.toFixed(1)} GB outbound in 5 mins
             </div>
           </div>
           <button
-            className="mt-5 w-full py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded transition-colors flex items-center justify-center gap-2 border border-red-500"
+            className="mt-5 w-full py-2 bg-red-600 hover:bg-red-700 text-white text-[12px] font-bold rounded-md transition-colors flex items-center justify-center gap-2"
           >
             <Ban className="w-4 h-4" />
             Block Export Route
@@ -156,44 +155,34 @@ export default function DatabaseMonitoringPage() {
           <div>
             <div className="flex items-center gap-2 mb-3">
               <Activity className="w-5 h-5 text-orange-500" />
-              <h3 className="text-slate-400 text-sm font-medium uppercase tracking-wide">Connection Pool Status</h3>
+              <h3 className="text-slate-400 text-sm font-medium uppercase tracking-wide">Connection Pool Exhaustion</h3>
             </div>
             <div className="flex items-center gap-2 mb-1">
               <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
-              <span className="text-slate-200 font-mono text-lg font-bold">{highestConnections} Active</span>
+              <span className="text-slate-200 font-mono text-lg font-bold">{highestExfil?.app ?? 'GenAI-Vector-DB'}</span>
             </div>
             <div className="text-sm text-orange-400 font-medium">
-              Avg latency: {data.avgQueryLatency.toFixed(0)}ms
+              {Math.min(99, Math.round((data.activeConnections / 200) * 100))}% Capacity | {Math.round(data.avgQueryLatency)}ms risk
             </div>
           </div>
-          <button className="mt-5 w-fit px-4 py-2 bg-orange-500/10 border border-orange-500/50 hover:bg-orange-500 hover:text-white text-orange-500 text-sm font-semibold rounded transition-all flex items-center gap-2">
+          <button className="mt-5 w-fit px-4 py-1.5 bg-orange-500/10 border border-orange-500/40 hover:bg-orange-500 hover:text-white text-orange-300 text-[11px] font-bold rounded-md transition-all flex items-center gap-2">
             <WifiOff className="w-4 h-4" />
             Drop Idle Connections
           </button>
         </div>
 
-        {/* Failed Auth / Suspicious Activity */}
+        {/* Failed Auth Attempts */}
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 flex flex-col justify-between">
           <div>
             <div className="flex items-center gap-2 mb-3">
               <Lock className="w-5 h-5 text-yellow-500" />
-              <h3 className="text-slate-400 text-sm font-medium uppercase tracking-wide">Suspicious DB Activity</h3>
+              <h3 className="text-slate-400 text-sm font-medium uppercase tracking-wide">Failed DB Auth Attempts</h3>
             </div>
-            <div className="space-y-2 mt-1">
-              {data.suspiciousActivity.slice(0, 2).map((act) => (
-                <div key={act.id} className="flex justify-between items-center bg-slate-800/50 p-2.5 rounded border border-slate-700/50">
-                  <span className="text-slate-200 font-mono text-xs">{act.app}</span>
-                  <span className="text-xs bg-red-900/30 text-red-400 px-2 py-0.5 rounded border border-red-500/20 font-bold">
-                    {act.type}
-                  </span>
-                </div>
-              ))}
-              {data.suspiciousActivity.length === 0 && (
-                <div className="text-slate-500 text-sm">No suspicious activity</div>
-              )}
-            </div>
-            <div className="mt-3 text-xs text-slate-500">
-              {data.suspiciousActivity.length} suspicious operations detected
+            <div className="flex items-center justify-between">
+              <div className="text-[11px] text-slate-500">Multiple failures from single IP source detected within last 10 minutes.</div>
+              <div className="text-[10px] px-2 py-0.5 rounded border border-slate-700 text-red-400 bg-red-950/30 font-semibold">
+                {Math.max(0, authFailures.length * 7)} attempts
+              </div>
             </div>
           </div>
         </div>

@@ -11,14 +11,13 @@ import { cn, getSeverityClassNames } from "@/lib/utils";
 import type { Severity, Incident } from "@/lib/types";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { aiInvestigatorSummary, AiInvestigatorSummaryOutput, AiInvestigatorSummaryInput } from '@/ai/flows/ai-investigator-summary';
-import { useToast } from '@/hooks/use-toast';
+import { toast } from "sonner";
 import { Skeleton } from '@/components/ui/skeleton';
 import { useEnvironment } from '@/context/EnvironmentContext';
 import { apiGet, apiPost, ApiError } from '@/lib/api';
 
 
 function IncidentDetailSheet({ incident, open, onOpenChange }: { incident: Incident | null; open: boolean; onOpenChange: (open: boolean) => void }) {
-  const { toast } = useToast();
   const [summary, setSummary] = useState<AiInvestigatorSummaryOutput | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [remediatingAction, setRemediatingAction] = useState<string | null>(null);
@@ -39,7 +38,7 @@ function IncidentDetailSheet({ incident, open, onOpenChange }: { incident: Incid
       aiInvestigatorSummary(input)
         .then(setSummary)
         .catch(() => {
-          toast({ title: "AI Summary Failed", description: "Could not generate AI summary.", variant: "destructive" });
+          toast.error("AI Summary Failed", { description: "Could not generate AI summary." });
           setSummary({ summaryText: "Could not generate AI summary.", attackVector: "N/A", potentialImpact: "N/A", context: "N/A" });
         })
         .finally(() => setIsLoading(false));
@@ -51,13 +50,14 @@ function IncidentDetailSheet({ incident, open, onOpenChange }: { incident: Incid
     setRemediatingAction(action);
     try {
       await apiPost<{ success: boolean; message: string }>("/incidents/remediate", { incidentId: incident.id, action });
-      toast({ title: `Action: ${action}`, description: `Action taken for incident ${incident.id}.` });
+      toast.success(`Action: ${action}`, { description: `Action taken for incident ${incident.id}.` });
       onOpenChange(false);
     } catch (err: unknown) {
-      toast({
-        title: "Error",
-        description: err instanceof Error ? err.message : `Failed to perform action '${action}' for incident ${incident.id}.`,
-        variant: "destructive",
+      toast.error("Error", {
+        description:
+          err instanceof Error
+            ? err.message
+            : `Failed to perform action '${action}' for incident ${incident.id}.`,
       });
     } finally {
       setRemediatingAction(null);
@@ -145,17 +145,16 @@ export default function IncidentsPage() {
     const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
     const [incidents, setIncidents] = useState<Incident[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    const { toast } = useToast();
     const { environment } = useEnvironment();
 
     useEffect(() => {
         let cancelled = false;
         setIsLoading(true);
-        apiGet<Incident[]>(`/incidents?env=${environment}`)
+        apiGet<Incident[]>(`/incidents`)
             .then((result) => { if (!cancelled) setIncidents(result); })
             .catch((err: ApiError) => {
                 if (!cancelled) {
-                    toast({ variant: "destructive", title: "Failed to Load Incidents Data", description: err.message });
+                    toast.error("Failed to Load Incidents Data", { description: err.message });
                     setIncidents([]);
                 }
             })

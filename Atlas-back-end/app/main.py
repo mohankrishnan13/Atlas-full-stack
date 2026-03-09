@@ -35,7 +35,10 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import router as dashboard_router
 from app.api.routes_auth import router as auth_router
+from app.api.routes_case_management import router as case_management_router
+from app.api.routes_figma_settings import router as figma_settings_router
 from app.api.routes_ingest import router as ingest_router
+from app.api.routes_reports import router as reports_router
 from app.api.routes_settings import router as settings_router
 from app.api.routes_webhooks import router as webhook_router
 from app.core.config import get_settings
@@ -165,6 +168,9 @@ app.include_router(auth_router)         # POST /api/auth/login, GET /api/auth/me
 app.include_router(ingest_router)       # POST /api/ingest/http
 app.include_router(webhook_router)      # POST /webhooks/velociraptor
 app.include_router(settings_router)     # GET/POST /settings/*
+app.include_router(figma_settings_router)  # GET/PUT /api/settings/apps/*
+app.include_router(reports_router)         # GET/POST /reports/*
+app.include_router(case_management_router) # GET /case-management
 
 
 # ── Global Exception Handler ──────────────────────────────────────────────────

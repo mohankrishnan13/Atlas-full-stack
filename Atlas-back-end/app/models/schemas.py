@@ -347,3 +347,115 @@ class ContainmentRuleUpdate(BaseModel):
     soft_limit_threshold: Optional[int] = None
     hard_block_threshold: Optional[int] = None
     enabled: Optional[bool] = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Figma-Specific Endpoints (Option 2 Contract Strategy)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class CaseManagementKpis(BaseModel):
+    criticalOpenCases: int
+    mttr: str
+    unassignedEscalations: int
+
+
+class CaseManagementCase(BaseModel):
+    caseId: str
+    scopeTags: List[str]
+    aiThreatNarrative: str
+    assigneeName: str
+    assigneeInitials: str
+    status: str
+    playbookActions: List[str]
+    targetApp: str
+
+
+class CaseManagementResponse(BaseModel):
+    kpis: CaseManagementKpis
+    cases: List[CaseManagementCase]
+
+
+class AppConfigResponse(BaseModel):
+    env: str
+    appId: str
+    warningAnomalyScore: int
+    criticalAnomalyScore: int
+    softRateLimitCallsPerMin: int
+    hardBlockThresholdCallsPerMin: int
+    autoQuarantineLaptops: bool
+    trainingWindowDays: int
+    modelSensitivityPct: int
+    autoUpdateBaselinesWeekly: bool
+    baselineModelName: str
+    baselineLastUpdatedAt: str
+
+
+class AppConfigUpdateRequest(BaseModel):
+    warningAnomalyScore: Optional[int] = None
+    criticalAnomalyScore: Optional[int] = None
+    softRateLimitCallsPerMin: Optional[int] = None
+    hardBlockThresholdCallsPerMin: Optional[int] = None
+    autoQuarantineLaptops: Optional[bool] = None
+    trainingWindowDays: Optional[int] = None
+    modelSensitivityPct: Optional[int] = None
+    autoUpdateBaselinesWeekly: Optional[bool] = None
+    baselineModelName: Optional[str] = None
+
+
+class QuarantinedEndpointRow(BaseModel):
+    workstationId: str
+    user: str
+    timeQuarantined: str
+    action: str
+
+
+class QuarantinedEndpointsResponse(BaseModel):
+    autoQuarantineLaptops: bool
+    quarantined: List[QuarantinedEndpointRow]
+
+
+class LiftQuarantineRequest(BaseModel):
+    appId: str
+    workstationId: str
+
+
+class LiftQuarantineResponse(BaseModel):
+    success: bool
+    message: str
+
+
+class ScheduledReportRow(BaseModel):
+    id: int
+    title: str
+    description: str
+    schedule: str
+    active: bool
+    configureLabel: str
+
+
+class RecentDownloadRow(BaseModel):
+    id: int
+    fileName: str
+    targetAppScope: str
+    generated: str
+    size: str
+    downloadUrl: str
+
+
+class ReportsOverviewResponse(BaseModel):
+    scheduledReports: List[ScheduledReportRow]
+    recentDownloads: List[RecentDownloadRow]
+
+
+class GenerateReportRequest(BaseModel):
+    dateRange: str
+    dataSource: str
+    template: str
+    exportFormat: str
+
+
+class GenerateReportResponse(BaseModel):
+    success: bool
+    message: str
+    download: Optional[RecentDownloadRow] = None
