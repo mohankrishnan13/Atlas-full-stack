@@ -46,6 +46,7 @@ class AppAnomaly(BaseModel):
 class Microservice(BaseModel):
     id: str
     name: str
+    type: str = "Service"  # "Service" | "Gateway" | "External"
     status: str        # "Healthy" | "Failing"
     position: Dict[str, str]   # { top: "50%", left: "15%" }
     connections: List[str]
@@ -469,7 +470,9 @@ class FigmaDashboardAppHealth(BaseModel):
     targetApp: str
     currentLoadLabel: str   # e.g. "450 req/m"
     status: str             # "healthy" | "warning" | "critical"
+    rateLimitLabel: str     # e.g. "Limit: 500 req/m"
     actionLabel: str        # e.g. "Apply Hard Limit"
+    tooltip: str            # Explanatory text for the widget
 
 
 class FigmaDashboardResponse(BaseModel):
@@ -481,6 +484,8 @@ class FigmaApiOveruseByApp(BaseModel):
     targetApp: str
     currentRpm: int
     limitRpm: int
+    baselineRpm: int
+    spikeLabel: str         # e.g. "+60%"
 
 
 class FigmaAbusedEndpointRow(BaseModel):
@@ -537,11 +542,31 @@ class FigmaEndpointVulnerableRow(BaseModel):
     workstationId: str
     cves: int
     riskLevel: str                # "Critical" | "High" | "Medium" | "Low"
+    topIssue: str                 # e.g. "outdated OpenSSL library"
 
 
 class FigmaEndpointPolicyViolatorRow(BaseModel):
     user: str
     violations: int
+    topViolation: str             # e.g. "Repeated attempts to connect restricted USB storage"
+
+
+class FigmaActiveMalwareRow(BaseModel):
+    device: str
+    threat: str
+    actionLabel: str
+
+
+class FigmaCriticalPolicyViolationRow(BaseModel):
+    device: str
+    violation: str
+    actionLabel: str
+
+
+class FigmaHighAnomalyUserRow(BaseModel):
+    user: str
+    score: int
+    reason: str
 
 
 class FigmaEndpointEventAction(BaseModel):
@@ -562,6 +587,9 @@ class FigmaEndpointEventRow(BaseModel):
 class FigmaEndpointSecurityResponse(BaseModel):
     vulnerableEndpoints: List[FigmaEndpointVulnerableRow]
     policyViolators: List[FigmaEndpointPolicyViolatorRow]
+    activeMalware: List[FigmaActiveMalwareRow]
+    criticalPolicyViolations: List[FigmaCriticalPolicyViolationRow]
+    highAnomalyUsers: List[FigmaHighAnomalyUserRow]
     endpointEvents: List[FigmaEndpointEventRow]
 
 

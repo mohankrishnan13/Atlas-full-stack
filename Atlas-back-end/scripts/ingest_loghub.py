@@ -264,6 +264,35 @@ async def ingest_loghub(data_root: Path, batch_size: int = 2000) -> None:
                             "linux": "Linux",
                             "mac": "macOS",
                         }.get(dataset, "Unknown")
+
+                        # --- Enhanced alert generation for realism ---
+                        alert_category = random.choice([
+                            "Malware", "Policy Violation", "USB Activity", "Login Attempts", "File Changes"
+                        ])
+                        alert_msg = content or f"Generic {alert_category} event"
+                        is_malware_flag = False
+
+                        if alert_category == "Malware":
+                            alert_msg = random.choice([
+                                "Cryptominer detected (xmrig.exe)",
+                                "Unauthorized remote session (sshd)",
+                                "Suspicious process detected (powershell.exe)",
+                                "Ransomware behavior pattern observed"
+                            ])
+                            severity = "Critical"
+                            is_malware_flag = True
+                        elif alert_category == "Policy Violation":
+                            alert_msg = random.choice([
+                                "Antivirus disabled",
+                                "Firewall disabled",
+                                "Unapproved software installed: qbittorrent.exe",
+                                "System policy violation: GPO-Security-Baseline"
+                            ])
+                            severity = "High"
+                        else:
+                            # Keep existing logic for other categories
+                            is_malware_flag = (severity in ["Critical", "High"]) and (random.random() < 0.2)
+
                         buffer.append(
                             EndpointLog(
                                 env=env,
@@ -271,30 +300,21 @@ async def ingest_loghub(data_root: Path, batch_size: int = 2000) -> None:
                                 timestamp=ts,
                                 level=level,
                                 component=component,
-                                content=content,
+                                content=alert_msg, # Use the generated message
                                 event_id=event_id,
                                 event_template=event_template,
                                 target_app=target_app,
                                 workstation_id=f"{os_name[:2].upper()}-{random.randint(100,999)}",
                                 employee=random.choice([
-                                    "John Doe",
-                                    "Jane Smith",
-                                    "Mike Johnson",
-                                    "Sarah Williams",
-                                    "David Brown",
+                                    "john.doe", "sarah.smith", "mike.johnson", "emily.williams", "david.brown",
                                 ]),
                                 avatar="https://i.pravatar.cc/150?img=12",
-                                alert_message=content or "Endpoint event",
-                                alert_category=random.choice([
-                                    "Malware",
-                                    "USB Activity",
-                                    "Login Attempts",
-                                    "File Changes",
-                                ]),
+                                alert_message=alert_msg,
+                                alert_category=alert_category,
                                 severity=severity,
                                 os_name=os_name,
                                 is_offline=random.random() < 0.1,
-                                is_malware=random.random() < 0.05,
+                                is_malware=is_malware_flag,
                                 raw_payload=raw_payload,
                             )
                         )
