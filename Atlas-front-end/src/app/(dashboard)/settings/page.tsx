@@ -17,9 +17,9 @@ import {
 } from '@/components/ui/dialog';
 import { Cog, SlidersHorizontal, Shield, BrainCircuit, Users, AlertTriangle, Search, PlusCircle, LoaderCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/context/AuthContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { toast } from 'sonner';
 
 type Tab = 'general' | 'alert-tuning' | 'containment' | 'ml-baselines' | 'user-access';
 
@@ -58,7 +58,6 @@ function InviteUserDialog({
   onClose: () => void;
   onInvited: (user: PlatformUser) => void;
 }) {
-  const { toast } = useToast();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('Analyst');
@@ -67,7 +66,7 @@ function InviteUserDialog({
 
   const handleSubmit = async () => {
     if (!name || !email) {
-      toast({ variant: 'destructive', title: 'Validation Error', description: 'Name and email are required.' });
+      toast.error('Validation Error', { description: 'Name and email are required.' });
       return;
     }
     setIsSaving(true);
@@ -75,12 +74,12 @@ function InviteUserDialog({
       const newUser = await apiPost<PlatformUser>('/api/auth/users/invite', {
         name, email, role, password: tempPassword || 'ChangeMe123!',
       });
-      toast({ title: 'User Invited', description: `${name} has been added as ${role}.` });
+      toast.success('User Invited', { description: `${name} has been added as ${role}.` });
       onInvited(newUser);
       onClose();
       setName(''); setEmail(''); setRole('Analyst'); setTempPassword('');
     } catch (err: any) {
-      toast({ variant: 'destructive', title: 'Invite Failed', description: err.message });
+      toast.error('Invite Failed', { description: err.message });
     } finally {
       setIsSaving(false);
     }
@@ -132,7 +131,6 @@ function InviteUserDialog({
 
 // ── User Access Tab ───────────────────────────────────────────────────────────
 function UserAccessTab({ isAdmin }: { isAdmin: boolean }) {
-  const { toast } = useToast();
   const [users, setUsers] = useState<PlatformUser[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -145,7 +143,7 @@ function UserAccessTab({ isAdmin }: { isAdmin: boolean }) {
       const data = await apiGet<PlatformUser[]>('/api/auth/users');
       setUsers(data);
     } catch (err: any) {
-      toast({ variant: 'destructive', title: 'Failed to Load Users', description: err.message });
+      toast.error('Failed to Load Users', { description: err.message });
     } finally {
       setIsLoading(false);
     }
@@ -161,10 +159,10 @@ function UserAccessTab({ isAdmin }: { isAdmin: boolean }) {
     setLoading(user.id, true);
     try {
       await apiDelete(`/api/auth/users/${user.id}`);
-      toast({ title: 'Access Revoked', description: `${user.name}'s account has been deactivated.` });
+      toast.success('Access Revoked', { description: `${user.name}'s account has been deactivated.` });
       setUsers((prev) => prev.map((u) => u.id === user.id ? { ...u, is_active: false } : u));
     } catch (err: any) {
-      toast({ variant: 'destructive', title: 'Revoke Failed', description: err.message });
+      toast.error('Revoke Failed', { description: err.message });
     } finally {
       setLoading(user.id, false);
     }
@@ -174,10 +172,10 @@ function UserAccessTab({ isAdmin }: { isAdmin: boolean }) {
     setLoading(user.id, true);
     try {
       const updated = await apiPut<PlatformUser>(`/api/auth/users/${user.id}/role`, { role: newRole });
-      toast({ title: 'Role Updated', description: `${user.name} is now ${newRole}.` });
+      toast.success('Role Updated', { description: `${user.name} is now ${newRole}.` });
       setUsers((prev) => prev.map((u) => u.id === updated.id ? updated : u));
     } catch (err: any) {
-      toast({ variant: 'destructive', title: 'Role Change Failed', description: err.message });
+      toast.error('Role Change Failed', { description: err.message });
     } finally {
       setLoading(user.id, false);
     }
@@ -192,11 +190,9 @@ function UserAccessTab({ isAdmin }: { isAdmin: boolean }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>User Access & Roles</CardTitle>
+        <CardTitle>User Access Management</CardTitle>
         <CardDescription>
-          {isAdmin
-            ? 'Manage platform user access, roles, and permissions.'
-            : 'View current platform users. Admin role required to make changes.'}
+          Enterprise RBAC — Manage team member roles and application access scopes
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -216,7 +212,7 @@ function UserAccessTab({ isAdmin }: { isAdmin: boolean }) {
               className="bg-emerald-600 hover:bg-emerald-700 text-white shrink-0"
             >
               <PlusCircle className="mr-2 h-4 w-4" />
-              Add New User
+              Invite Team Member
             </Button>
           )}
         </div>
@@ -224,8 +220,9 @@ function UserAccessTab({ isAdmin }: { isAdmin: boolean }) {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>User</TableHead>
-              <TableHead>Role</TableHead>
+              <TableHead>User Info</TableHead>
+              <TableHead>Role Badge</TableHead>
+              <TableHead>App Access Scope</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -233,7 +230,7 @@ function UserAccessTab({ isAdmin }: { isAdmin: boolean }) {
           <TableBody>
             {isLoading && Array.from({ length: 3 }).map((_, i) => (
               <TableRow key={i}>
-                <TableCell colSpan={4}><Skeleton className="h-10 w-full" /></TableCell>
+                <TableCell colSpan={5}><Skeleton className="h-10 w-full" /></TableCell>
               </TableRow>
             ))}
             {!isLoading && filtered.map((u) => {
@@ -279,6 +276,11 @@ function UserAccessTab({ isAdmin }: { isAdmin: boolean }) {
                     ) : (
                       <Badge variant="outline" className={roleStyle[u.role] ?? ''}>{u.role}</Badge>
                     )}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="bg-slate-800/40 border-slate-700 text-slate-300">All Applications</Badge>
+                    </div>
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
@@ -328,9 +330,18 @@ function UserAccessTab({ isAdmin }: { isAdmin: boolean }) {
 // ── Main Settings Page ────────────────────────────────────────────────────────
 export default function SettingsPage() {
   const { user } = useAuth();
-  const { toast } = useToast();
   const isAdmin = user?.role === 'Admin';
   const [activeTab, setActiveTab] = useState<Tab>('general');
+
+  const [appId, setAppId] = useState<string>('');
+  const [appName, setAppName] = useState<string>('');
+  const [isLoadingConfig, setIsLoadingConfig] = useState<boolean>(true);
+
+  const [quarantineAuto, setQuarantineAuto] = useState<boolean>(false);
+  const [quarantined, setQuarantined] = useState<
+    { workstationId: string; user: string; timeQuarantined: string; action: string }[]
+  >([]);
+  const [isLoadingQuarantine, setIsLoadingQuarantine] = useState<boolean>(false);
 
   const [systemName, setSystemName] = useState('ATLAS | Enterprise Anomaly Monitoring System');
   const [timezone, setTimezone] = useState('utc');
@@ -348,13 +359,103 @@ export default function SettingsPage() {
   const [modelSensitivity, setModelSensitivity] = useState('balanced');
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingConfig(true);
+    apiGet<{ applications: { id: string; name: string }[] }>("/header-data")
+      .then((hd) => {
+        if (cancelled) return;
+        const first = hd.applications?.[0];
+        if (first) {
+          setAppId(first.id);
+          setAppName(first.name);
+        }
+      })
+      .catch((err: any) => {
+        if (cancelled) return;
+        toast.error("Failed to load applications", { description: err?.message || "Request failed." });
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingConfig(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const fetchAppConfig = useCallback(async () => {
+    if (!appId) return;
+    setIsLoadingConfig(true);
+    try {
+      const cfg = await apiGet<any>(`/api/settings/apps/${appId}`);
+      setWarningThreshold([cfg.warningAnomalyScore ?? 60]);
+      setCriticalThreshold([cfg.criticalAnomalyScore ?? 80]);
+      setSoftLimit([cfg.softRateLimitCallsPerMin ?? 300]);
+      setHardBlock([cfg.hardBlockThresholdCallsPerMin ?? 1000]);
+      setAutoQuarantine(!!cfg.autoQuarantineLaptops);
+      setTrainingWindow(cfg.trainingWindowDays ?? 30);
+      setModelSensitivity(String(cfg.modelSensitivityPct ?? 58));
+      setEnableML(!!cfg.autoUpdateBaselinesWeekly);
+    } catch (err: any) {
+      toast.error("Failed to load app settings", { description: err?.message || "Request failed." });
+    } finally {
+      setIsLoadingConfig(false);
+    }
+  }, [appId]);
+
+  useEffect(() => {
+    fetchAppConfig();
+  }, [fetchAppConfig]);
+
+  const fetchQuarantine = useCallback(async () => {
+    if (!appId) return;
+    setIsLoadingQuarantine(true);
+    try {
+      const resp = await apiGet<any>(`/api/settings/apps/${appId}/quarantine`);
+      setQuarantineAuto(!!resp.autoQuarantineLaptops);
+      setQuarantined(resp.quarantined || []);
+    } catch (err: any) {
+      toast.error("Failed to load quarantine", { description: err?.message || "Request failed." });
+    } finally {
+      setIsLoadingQuarantine(false);
+    }
+  }, [appId]);
+
+  useEffect(() => {
+    fetchQuarantine();
+  }, [fetchQuarantine]);
+
   const handleSaveSettings = async () => {
+    if (!appId) return;
     setIsSavingSettings(true);
     try {
-      await new Promise((r) => setTimeout(r, 600)); // Simulate API call
-      toast({ title: 'Settings Saved', description: 'System configuration has been updated.' });
+      await apiPut(`/api/settings/apps/${appId}`, {
+        warningAnomalyScore: warningThreshold[0],
+        criticalAnomalyScore: criticalThreshold[0],
+        softRateLimitCallsPerMin: softLimit[0],
+        hardBlockThresholdCallsPerMin: hardBlock[0],
+        autoQuarantineLaptops: autoQuarantine,
+        trainingWindowDays: trainingWindow,
+        modelSensitivityPct: Number(modelSensitivity) || 58,
+        autoUpdateBaselinesWeekly: enableML,
+      });
+      toast.success('Settings Saved', { description: 'System configuration has been updated.' });
+      await fetchQuarantine();
+    } catch (err: any) {
+      toast.error('Save Failed', { description: err?.message || 'Request failed.' });
     } finally {
       setIsSavingSettings(false);
+    }
+  };
+
+  const handleLiftQuarantine = async (workstationId: string) => {
+    if (!appId) return;
+    try {
+      const resp = await apiPost<any>(`/api/settings/apps/${appId}/quarantine/lift`, { workstationId });
+      toast.success('Quarantine lifted', { description: resp?.message || workstationId });
+      await fetchQuarantine();
+    } catch (err: any) {
+      toast.error('Lift failed', { description: err?.message || 'Request failed.' });
     }
   };
 
@@ -458,6 +559,51 @@ export default function SettingsPage() {
                   <Switch checked={autoQuarantine} onCheckedChange={setAutoQuarantine} disabled={!isAdmin} />
                 </div>
               </div>
+
+              <div className="pt-4 border-t border-slate-800 space-y-4">
+                <h4 className="text-lg font-semibold">Quarantined Endpoints</h4>
+                {isLoadingQuarantine ? (
+                  <div className="text-sm text-muted-foreground">Loading quarantine...</div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Workstation</TableHead>
+                        <TableHead>User</TableHead>
+                        <TableHead>Time Quarantined</TableHead>
+                        <TableHead className="text-right">Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {quarantined.map((q) => (
+                        <TableRow key={q.workstationId}>
+                          <TableCell className="font-mono text-xs">{q.workstationId}</TableCell>
+                          <TableCell>{q.user}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{q.timeQuarantined}</TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => handleLiftQuarantine(q.workstationId)}
+                              disabled={!isAdmin}
+                            >
+                              {q.action || 'Lift Quarantine'}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {quarantined.length === 0 && (
+                        <TableRow>
+                          <TableCell colSpan={4} className="text-center text-muted-foreground">
+                            No quarantined endpoints.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+
               {isAdmin && <Button onClick={handleSaveSettings} disabled={isSavingSettings} className="bg-blue-600 hover:bg-blue-700">{isSavingSettings && <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />}Save Settings</Button>}
             </CardContent>
           </Card>

@@ -27,7 +27,7 @@ import {
 } from "../../../components/ui/table";
 import { useAuth } from "../../../context/AuthContext";
 import { apiPut, apiPost, apiPatch, apiGet, ApiError } from "../../../lib/api";
-import { useToast } from "../../../hooks/use-toast";
+import { toast } from "sonner";
 import { Terminal, LoaderCircle } from "lucide-react";
 
 type SessionRecord = {
@@ -41,7 +41,6 @@ type SessionRecord = {
 
 export default function ProfilePage() {
   const { user, setUser } = useAuth();
-  const { toast } = useToast();
 
   const [name, setName] = useState(user?.name || "");
   const [email, setEmail] = useState(user?.email || "");
@@ -77,11 +76,7 @@ export default function ProfilePage() {
         const data = await apiGet<SessionRecord[]>("/api/auth/sessions");
         setSessions(data);
       } catch (err: any) {
-        toast({
-          title: "Error",
-          description: `Failed to load sessions: ${err.message}`,
-          variant: "destructive",
-        });
+        toast.error("Failed to load sessions.", { description: err.message });
       } finally {
         setIsLoadingSessions(false);
       }
@@ -89,7 +84,7 @@ export default function ProfilePage() {
     if (user) {
       fetchSessions();
     }
-  }, [user, toast]);
+  }, [user]);
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -97,16 +92,9 @@ export default function ProfilePage() {
     try {
       const updatedUser = await apiPut("/api/auth/me", { name, email, phone, avatar });
       setUser(updatedUser);
-      toast({
-        title: "Profile Updated",
-        description: "Your profile has been successfully updated.",
-      });
+      toast.success("Profile Updated", { description: "Your profile has been successfully updated." });
     } catch (err: any) {
-      toast({
-        title: "Error Updating Profile",
-        description: err.message,
-        variant: "destructive",
-      });
+      toast.error("Error Updating Profile", { description: err.message });
     } finally {
       setIsUpdatingProfile(false);
     }
@@ -115,11 +103,7 @@ export default function ProfilePage() {
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newPassword !== confirmPassword) {
-      toast({
-        title: "Validation Error",
-        description: "New password and confirmation do not match.",
-        variant: "destructive",
-      });
+      toast.error("New password and confirmation do not match.");
       return;
     }
     setIsChangingPassword(true);
@@ -129,19 +113,12 @@ export default function ProfilePage() {
         new_password: newPassword,
         confirm_password: confirmPassword,
       });
-      toast({
-        title: "Password Changed",
-        description: "Your password has been successfully updated.",
-      });
+      toast.success("Password Changed", { description: "Your password has been successfully updated." });
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
     } catch (err: any) {
-      toast({
-        title: "Error Changing Password",
-        description: err.message,
-        variant: "destructive",
-      });
+      toast.error("Error Changing Password", { description: err.message });
     } finally {
       setIsChangingPassword(false);
     }
@@ -153,16 +130,9 @@ export default function ProfilePage() {
       const response = await apiPatch("/api/auth/2fa", { enabled: checked });
       setTotpEnabled(checked);
       setUser((prevUser) => (prevUser ? { ...prevUser, totp_enabled: checked } : null));
-      toast({
-        title: "2FA Status Updated",
-        description: response.message,
-      });
+      toast.success("2FA Status Updated", { description: response.message });
     } catch (err: any) {
-      toast({
-        title: "Error Toggling 2FA",
-        description: err.message,
-        variant: "destructive",
-      });
+      toast.error("Error Toggling 2FA", { description: err.message });
     } finally {
       setIsToggling2FA(false);
     }

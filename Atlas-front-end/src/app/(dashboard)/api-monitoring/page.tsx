@@ -11,8 +11,36 @@ import {
 } from 'recharts';
 import { apiGet, apiPost, ApiError } from '@/lib/api';
 import { useEnvironment } from '@/context/EnvironmentContext';
-import { useToast } from '@/hooks/use-toast';
-import type { ApiMonitoringData } from '@/lib/types';
+import { toast } from 'sonner';
+type FigmaApiOveruseByApp = { targetApp: string; currentRpm: number; limitRpm: number };
+type FigmaAbusedEndpointRow = { endpoint: string; violations: number; severity: 'critical' | 'high' | 'medium' };
+type FigmaTopConsumerRow = {
+  consumer: string;
+  targetApp: string;
+  callsLabel: string;
+  costLabel: string;
+  isOveruse: boolean;
+  actionLabel: string;
+  actionType: 'warning' | 'critical' | 'neutral';
+};
+type FigmaApiMitigationFeedRow = {
+  target: string;
+  offender: string;
+  violation: string;
+  details: string;
+  actionLabel: string;
+  actionColor: 'red' | 'blue';
+};
+type FigmaApiMonitoringResponse = {
+  totalApiCallsLabel: string;
+  blockedThreatsLabel: string;
+  globalAvailabilityLabel: string;
+  activeIncidentsLabel: string;
+  apiOveruseByTargetApp: FigmaApiOveruseByApp[];
+  mostAbusedEndpoints: FigmaAbusedEndpointRow[];
+  topConsumersByTargetApp: FigmaTopConsumerRow[];
+  activeMitigationFeed: FigmaApiMitigationFeedRow[];
+};
 
 function ChartTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
@@ -68,34 +96,29 @@ function LoadingSkeleton() {
 }
 
 export default function ApiMonitoringPage() {
-  const [data, setData] = useState<ApiMonitoringData | null>(null);
+  const [data, setData] = useState<FigmaApiMonitoringResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const { environment } = useEnvironment();
-  const { toast } = useToast();
 
   useEffect(() => {
     setLoading(true);
-    apiGet<ApiMonitoringData>(`/api-monitoring?env=${environment}`)
+    apiGet<FigmaApiMonitoringResponse>(`/figma/api-monitoring`)
       .then(setData)
       .catch((err) => {
-        toast({
-          title: 'Error',
-          description: err instanceof ApiError ? err.message : 'Failed to load API monitoring data.',
-          variant: 'destructive',
+        toast.error('Failed to load API monitoring data.', {
+          description: err instanceof ApiError ? err.message : 'Request failed.',
         });
       })
       .finally(() => setLoading(false));
-  }, [environment, toast]);
+  }, [environment]);
 
   const handleBlockRoute = async (app: string, path: string) => {
     try {
       await apiPost('/api-monitoring/block-route', { app, path });
-      toast({ title: 'Hard Block Applied', description: `Route ${app} ${path} has been blocked.` });
+      toast.success('Hard Block Applied', { description: `Route ${app} ${path} has been blocked.` });
     } catch (err) {
-      toast({
-        title: 'Error',
-        description: err instanceof ApiError ? err.message : 'Block action failed.',
-        variant: 'destructive',
+      toast.error('Block action failed.', {
+        description: err instanceof ApiError ? err.message : 'Request failed.',
       });
     }
   };
@@ -107,72 +130,67 @@ export default function ApiMonitoringPage() {
     </div>
   );
 
-  // Map apiConsumptionByApp → overuse chart
-  const overuseData = data.apiConsumptionByApp.map((a) => ({
-    app: a.app,
-    current: a.actual,
-    limit: a.limit,
+  const overuseData = data.apiOveruseByTargetApp.map((a) => ({
+    app: a.targetApp,
+    current: a.currentRpm,
+    limit: a.limitRpm,
   }));
 
-  // Map apiRouting → abused endpoints (sorted by cost descending)
-  const abusedEndpoints = [...data.apiRouting]
-    .sort((a, b) => b.cost - a.cost)
-    .slice(0, 6)
-    .map((r) => ({
-      endpoint: `[${r.app}] ${r.path}`,
-      count: Math.round(r.cost * 100),
-      severity: r.action === 'Blocked' ? 'critical' : r.action === 'Rate-Limited' ? 'high' : 'medium',
-    }));
+  const abusedEndpoints = data.mostAbusedEndpoints.map((r) => ({
+    endpoint: r.endpoint,
+    count: r.violations,
+    severity: r.severity,
+  }));
 
-  // Top consumers table
-  const topConsumers = [...data.apiRouting]
-    .sort((a, b) => b.cost - a.cost)
-    .slice(0, 5)
-    .map((r) => ({
-      consumer: r.app.toLowerCase().replace(/ /g, '_') + '_service',
-      app: `[${r.app}]`,
-      calls: `${Math.round(r.cost * 40)}K`,
-      cost: `$${r.cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      isOveruse: r.trend > 0,
-      actionLabel: r.action === 'Blocked' ? 'View Block' : r.action === 'Rate-Limited' ? 'Review Quota' : 'Audit Logs',
-      actionType: r.action === 'Blocked' ? 'critical' : r.action === 'Rate-Limited' ? 'warning' : 'neutral',
-      path: r.path,
-    }));
+  const topConsumers = data.topConsumersByTargetApp.map((r) => ({
+    consumer: r.consumer,
+    app: r.targetApp,
+    calls: r.callsLabel,
+    cost: r.costLabel,
+    isOveruse: r.isOveruse,
+    actionLabel: r.actionLabel,
+    actionType: r.actionType,
+    path: '/unknown',
+  }));
 
-  // Active mitigation feed: routes that aren't OK
-  const mitigationFeed = data.apiRouting
-    .filter((r) => r.action !== 'OK')
-    .map((r) => ({
-      target: `[${r.app}]`,
-      offender: r.app.toLowerCase().replace(/ /g, '_') + '_bot',
-      violation: r.action === 'Blocked' ? 'Hard Blocked Route' : 'Rate Limit Exceeded',
-      details: `${r.method} ${r.path} — trend: ${r.trend > 0 ? '+' : ''}${r.trend}%`,
-      actionLabel: r.action === 'Blocked' ? 'View Policy' : 'Enforce Hard Block',
-      actionColor: r.action === 'Blocked' ? 'blue' : 'red',
-      app: r.app,
-      path: r.path,
-    }));
+  const mitigationFeed = data.activeMitigationFeed.map((r) => ({
+    target: r.target,
+    offender: r.offender,
+    violation: r.violation,
+    details: r.details,
+    actionLabel: r.actionLabel,
+    actionColor: r.actionColor,
+    app: r.target.replace('[', '').replace(']', ''),
+    path: '/unknown',
+  }));
 
-  const criticalIncidents = data.apiRouting.filter((r) => r.action === 'Blocked').length;
+  const criticalIncidents = (() => {
+    const m = data.activeIncidentsLabel.match(/(\d+)/);
+    return m ? Number(m[1]) : 0;
+  })();
 
   return (
     <div className="space-y-6">
 
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-medium text-slate-300">API Monitoring</div>
+      </div>
+
       {/* Stat Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <StatCard value={data.apiCallsToday.toLocaleString()} label="Total API Calls" icon={Activity} />
-        <StatCard value={data.blockedRequests.toLocaleString()} label="Blocked Threats" color="red" icon={Ban} />
+        <StatCard value={data.totalApiCallsLabel} label="Total API Calls" icon={Activity} />
+        <StatCard value={data.blockedThreatsLabel} label="Blocked Threats" color="red" icon={Ban} />
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 flex items-center justify-between">
           <div>
-            <div className="text-2xl font-bold text-emerald-400">{data.avgLatency.toFixed(0)}ms</div>
-            <div className="text-sm text-slate-400 mt-0.5">Avg Latency</div>
+            <div className="text-2xl font-bold text-slate-100">{data.globalAvailabilityLabel}</div>
+            <div className="text-sm text-slate-400 mt-0.5">Global Availability</div>
           </div>
-          <Activity className="w-8 h-8 text-emerald-500 opacity-60" />
+          <TrendingUp className="w-8 h-8 text-emerald-500 opacity-60" />
         </div>
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 flex items-center justify-between">
           <div>
             <div className="text-2xl font-bold text-orange-400">
-              {criticalIncidents > 0 ? `${criticalIncidents} Critical` : 'None'}
+              {data.activeIncidentsLabel}
             </div>
             <div className="text-sm text-slate-400 mt-0.5">Active Incidents</div>
           </div>
@@ -187,7 +205,10 @@ export default function ApiMonitoringPage() {
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6">
           <div className="flex items-center gap-2 mb-6">
             <Server className="w-5 h-5 text-blue-400" />
-            <h2 className="text-lg font-semibold text-slate-100">API Overuse by Target Application</h2>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-100">API Overuse by Target Application</h2>
+              <div className="text-[11px] text-slate-500">RPM</div>
+            </div>
           </div>
           {overuseData.length > 0 ? (
             <div style={{ width: '100%', height: 320 }}>
@@ -216,7 +237,10 @@ export default function ApiMonitoringPage() {
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6">
           <div className="flex items-center gap-2 mb-6">
             <ShieldAlert className="w-5 h-5 text-red-400" />
-            <h2 className="text-lg font-semibold text-slate-100">Most Abused API Endpoints</h2>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-100">Most Abused API Endpoints</h2>
+              <div className="text-[11px] text-slate-500">Abuse concentration</div>
+            </div>
           </div>
           {abusedEndpoints.length > 0 ? (
             <div style={{ width: '100%', height: 320 }}>

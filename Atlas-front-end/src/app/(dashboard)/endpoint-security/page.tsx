@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import { apiGet, apiPost, ApiError } from '@/lib/api';
 import { useEnvironment } from '@/context/EnvironmentContext';
-import { useToast } from '@/hooks/use-toast';
+import { toast } from 'sonner';
 import type { EndpointSecurityData, WazuhEvent } from '@/lib/types';
 
 function ChartTooltip({ active, payload, label }: any) {
@@ -46,17 +46,14 @@ export default function EndpointSecurityPage() {
   const [data, setData] = useState<EndpointSecurityData | null>(null);
   const [loading, setLoading] = useState(true);
   const { environment } = useEnvironment();
-  const { toast } = useToast();
 
   const fetchData = () => {
     setLoading(true);
-    apiGet<EndpointSecurityData>(`/endpoint-security?env=${environment}`)
+    apiGet<EndpointSecurityData>(`/endpoint-security`)
       .then(setData)
       .catch((err) => {
-        toast({
-          title: 'Error',
-          description: err instanceof ApiError ? err.message : 'Failed to load endpoint data.',
-          variant: 'destructive',
+        toast.error('Failed to load endpoint data.', {
+          description: err instanceof ApiError ? err.message : 'Request failed.',
         });
       })
       .finally(() => setLoading(false));
@@ -70,12 +67,10 @@ export default function EndpointSecurityPage() {
         '/endpoint-security/quarantine',
         { workstationId }
       );
-      toast({ title: 'Device Quarantined', description: res.message });
+      toast.success('Device Quarantined', { description: res.message });
     } catch (err) {
-      toast({
-        title: 'Error',
-        description: err instanceof ApiError ? err.message : 'Quarantine action failed.',
-        variant: 'destructive',
+      toast.error('Quarantine action failed.', {
+        description: err instanceof ApiError ? err.message : 'Request failed.',
       });
     }
   };
@@ -133,6 +128,10 @@ export default function EndpointSecurityPage() {
   return (
     <div className="space-y-6">
 
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-medium text-slate-300">Endpoint Security</div>
+      </div>
+
       {/* Top Row: Threat KPIs */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
 
@@ -147,8 +146,7 @@ export default function EndpointSecurityPage() {
               Active Malware Infections
             </h3>
             <div className="text-3xl font-bold text-slate-100 mt-3">
-              <span className="text-red-500">{data.malwareAlerts} Device{data.malwareAlerts !== 1 ? 's' : ''}</span>
-              {' '}Compromised
+              <span className="text-red-500">{data.malwareAlerts} Device{data.malwareAlerts !== 1 ? 's' : ''}</span> Compromised
             </div>
           </div>
           <button
@@ -156,7 +154,7 @@ export default function EndpointSecurityPage() {
               compromisedDevices[0] &&
               handleQuarantine(compromisedDevices[0].workstationId)
             }
-            className="mt-5 w-full py-2 text-sm font-bold text-white bg-red-600 hover:bg-red-700 rounded transition-colors flex items-center justify-center gap-2"
+            className="mt-5 w-full py-2 text-[12px] font-bold text-white bg-red-600 hover:bg-red-700 rounded-md transition-colors flex items-center justify-center gap-2"
           >
             <Ban className="w-4 h-4" />
             Isolate Devices
@@ -196,7 +194,7 @@ export default function EndpointSecurityPage() {
               )}
             </div>
           </div>
-          <button className="mt-5 w-fit px-4 py-1.5 text-xs font-semibold text-orange-400 border border-orange-500/50 rounded hover:bg-orange-900/20 transition-colors flex items-center gap-2">
+          <button className="mt-5 w-fit px-4 py-1.5 text-[11px] font-bold text-orange-300 border border-orange-500/30 rounded-md hover:bg-orange-900/20 transition-colors flex items-center gap-2">
             <Shield className="w-3 h-3" />
             Force Enable AV
           </button>

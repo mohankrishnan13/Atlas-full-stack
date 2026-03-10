@@ -11,8 +11,20 @@ import {
 } from 'recharts';
 import { apiGet, apiPost, ApiError } from '@/lib/api';
 import { useEnvironment } from '@/context/EnvironmentContext';
-import { useToast } from '@/hooks/use-toast';
+import { toast } from 'sonner';
 import type { OverviewData } from '@/lib/types';
+
+type FigmaDashboardAppHealth = {
+  targetApp: string;
+  currentLoadLabel: string;
+  status: 'healthy' | 'warning' | 'critical';
+  actionLabel: string;
+};
+
+type FigmaDashboardResponse = {
+  aiBriefing: string;
+  appHealth: FigmaDashboardAppHealth[];
+};
 
 // ─── Tooltip ────────────────────────────────────────────────────────────────
 function ChartTooltip({ active, payload, label }: any) {
@@ -44,46 +56,44 @@ function AppHealthCard({
       dot: 'bg-red-500',
       badge: 'text-red-400 bg-red-500/10 border-red-500/30',
       label: 'Critical',
-      btn: 'border-red-500 text-red-400 hover:bg-red-500/10',
-      card: 'border-red-500/40 shadow-[0_0_15px_rgba(239,68,68,0.15)]',
+      btn: 'bg-red-600 hover:bg-red-700 text-white',
+      card: 'border-slate-800',
     },
     warning: {
       dot: 'bg-yellow-500',
       badge: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30',
       label: 'Warning',
-      btn: 'border-yellow-500 text-yellow-400 hover:bg-yellow-500/10',
-      card: 'border-yellow-500/30',
+      btn: 'bg-yellow-600 hover:bg-yellow-700 text-slate-950',
+      card: 'border-slate-800',
     },
     healthy: {
       dot: 'bg-emerald-500',
       badge: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
       label: 'Healthy',
-      btn: 'border-emerald-500 text-emerald-400 hover:bg-emerald-500/10',
+      btn: 'bg-emerald-900/40 hover:bg-emerald-900/60 text-emerald-200 border border-emerald-700/40',
       card: 'border-slate-800',
     },
   };
   const cfg = statusConfig[status];
 
   return (
-    <div className={`bg-slate-900 border rounded-lg p-6 flex flex-col gap-4 ${cfg.card}`}>
+    <div className={`bg-slate-900 border rounded-lg px-6 pt-5 pb-4 flex flex-col gap-4 ${cfg.card}`}>
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${cfg.dot} ${status !== 'healthy' ? 'animate-pulse' : ''}`} />
-          <span className="text-slate-200 font-semibold text-sm">{appName}</span>
-        </div>
+        <div className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Target Application</div>
         <span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${cfg.badge}`}>
           {cfg.label}
         </span>
       </div>
+      <div className="text-sm font-semibold text-slate-100 truncate">{appName}</div>
       <div>
         <div className="text-2xl font-bold text-slate-100">{load}</div>
         <div className="text-xs text-slate-500 mt-0.5">Current Load</div>
       </div>
       <button
         onClick={onAction}
-        className={`w-full py-2 text-xs font-semibold rounded border transition-colors ${cfg.btn}`}
+        className={`w-full py-2 text-[11px] font-bold rounded-md transition-colors ${cfg.btn}`}
       >
-        {actionLabel}
+        {actionLabel.toUpperCase()}
       </button>
     </div>
   );
@@ -108,33 +118,43 @@ function LoadingSkeleton() {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function OverviewPage() {
   const [data, setData] = useState<OverviewData | null>(null);
+  const [figma, setFigma] = useState<FigmaDashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const { environment } = useEnvironment();
-  const { toast } = useToast();
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
-    apiGet<OverviewData>(`/overview?env=${environment}`)
-      .then(setData)
-      .catch((err) => {
-        toast({
-          title: 'Error',
-          description: err instanceof ApiError ? err.message : 'Failed to load overview data.',
-          variant: 'destructive',
-        });
+    Promise.all([
+      apiGet<OverviewData>(`/overview`),
+      apiGet<FigmaDashboardResponse>(`/figma/dashboard`),
+    ])
+      .then(([ov, dash]) => {
+        if (cancelled) return;
+        setData(ov);
+        setFigma(dash);
       })
-      .finally(() => setLoading(false));
-  }, [environment, toast]);
+      .catch((err) => {
+        toast.error('Failed to load overview data.', {
+          description: err instanceof ApiError ? err.message : 'Request failed.',
+        });
+        if (!cancelled) {
+          setData(null);
+          setFigma(null);
+        }
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [environment]);
 
   const handleMitigate = async (app: string, path = '/*') => {
     try {
       await apiPost('/api-monitoring/block-route', { app, path });
-      toast({ title: 'Mitigation Applied', description: `Hard limit applied for ${app}.` });
+      toast.success('Mitigation Applied', { description: `Hard limit applied for ${app}.` });
     } catch (err) {
-      toast({
-        title: 'Error',
-        description: err instanceof ApiError ? err.message : 'Mitigation failed.',
-        variant: 'destructive',
+      toast.error('Mitigation failed.', {
+        description: err instanceof ApiError ? err.message : 'Request failed.',
       });
     }
   };
@@ -146,21 +166,27 @@ export default function OverviewPage() {
     </div>
   );
 
-  // Map microservices to app health cards
-  const appCards = data.microservices.slice(0, 3).map((svc) => {
-    const reqData = data.apiRequestsByApp.find((a) =>
-      a.app.toLowerCase().includes(svc.name.toLowerCase().split('-')[0])
-    );
-    const load = reqData
-      ? `${reqData.requests.toLocaleString()} req/m`
-      : svc.connections.length > 0
-        ? `${svc.connections.length * 150} req/m`
-        : 'Idle';
-    const status: 'critical' | 'warning' | 'healthy' =
-      svc.status === 'Failing' ? 'critical' : 'healthy';
-    const actionLabel = svc.status === 'Failing' ? 'Apply Hard Limit' : 'View Traffic';
-    return { svc, load, status, actionLabel };
-  });
+  const appCards =
+    figma?.appHealth?.length
+      ? figma.appHealth.map((row, idx) => ({
+          id: `${idx}`,
+          appName: row.targetApp,
+          load: row.currentLoadLabel,
+          status: row.status,
+          actionLabel: row.actionLabel,
+        }))
+      : data.microservices.slice(0, 3).map((svc) => {
+          const reqData = data.apiRequestsByApp.find((a) =>
+            a.app.toLowerCase().includes(svc.name.toLowerCase().split('-')[0])
+          );
+          const load = reqData
+            ? `${reqData.requests.toLocaleString()} req/m`
+            : `${Math.max(0, svc.connections.length) * 150} req/m`;
+          const status: 'critical' | 'warning' | 'healthy' =
+            svc.status === 'Failing' ? 'critical' : svc.status === 'Degraded' ? 'warning' : 'healthy';
+          const actionLabel = status === 'critical' ? 'Apply Hard Limit' : status === 'warning' ? 'Isolate DB' : 'View Traffic';
+          return { id: svc.id, appName: svc.name, load, status, actionLabel };
+        });
 
   // Anomaly bar chart data: app anomalies
   const anomalyChartData = data.appAnomalies.slice(0, 6);
@@ -176,63 +202,38 @@ export default function OverviewPage() {
     <div className="space-y-6">
 
       {/* AI Daily Threat Briefing */}
-      <div className="bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/30 rounded-lg p-6 relative overflow-hidden">
-        <div className="absolute inset-0 bg-blue-500/5 blur-3xl opacity-20 pointer-events-none" />
-        <div className="relative z-10 flex items-start gap-4">
-          <div className="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center flex-shrink-0 border border-blue-500/30 shadow-[0_0_15px_rgba(59,130,246,0.5)]">
-            <Sparkles className="w-5 h-5 text-blue-400 animate-pulse" />
+      <div className="bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-slate-800 rounded-lg px-6 py-5">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 bg-indigo-500/15 rounded-lg flex items-center justify-center flex-shrink-0 border border-indigo-500/25">
+            <Sparkles className="w-4 h-4 text-indigo-300" />
           </div>
           <div className="flex-1">
-            <h3 className="text-base font-semibold text-slate-50 mb-2 flex items-center gap-2">
-              ATLAS AI Briefing
-              <span className="text-[10px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded border border-blue-500/30">
-                LIVE
-              </span>
-            </h3>
-            <p className="text-sm text-slate-300 leading-relaxed">
-              Monitoring{' '}
-              <strong className="text-blue-400">{data.microservices.length} services</strong>{' '}
-              across the environment.{' '}
-              {data.activeAlerts > 0 ? (
-                <>
-                  Detected{' '}
-                  <strong className="text-red-400">{data.activeAlerts} active alert{data.activeAlerts !== 1 ? 's' : ''}</strong>.{' '}
-                </>
-              ) : (
-                <strong className="text-emerald-400">No critical alerts active. </strong>
-              )}
-              {data.microservices.filter((m) => m.status === 'Failing').length > 0 && (
-                <>
-                  <strong className="text-orange-400">
-                    {data.microservices.filter((m) => m.status === 'Failing').length} service(s) in failing state
-                  </strong>{' '}
-                  — containment rules are active.{' '}
-                </>
-              )}
-              API cost risk score:{' '}
-              <strong className={data.costRisk > 70 ? 'text-red-400' : 'text-yellow-400'}>
-                {data.costRisk}%
-              </strong>.
-            </p>
+            <div className="flex items-center gap-2">
+              <div className="text-sm font-semibold text-slate-100">ATLAS AI Briefing</div>
+              <span className="text-[10px] bg-indigo-500/15 text-indigo-300 px-2 py-0.5 rounded border border-indigo-500/20">LIVE</span>
+            </div>
+            <div className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+              {figma?.aiBriefing ?? ''}
+            </div>
           </div>
         </div>
       </div>
 
       {/* App-Specific Health Matrix */}
       <div>
-        <div className="flex items-center gap-2 mb-4">
-          <Server className="w-5 h-5 text-blue-400" />
-          <h2 className="text-base font-semibold text-slate-50">App-Specific Health Matrix</h2>
+        <div className="flex items-center gap-2 mb-3">
+          <Server className="w-4 h-4 text-slate-300" />
+          <h2 className="text-sm font-semibold text-slate-100">App-Specific Health Matrix</h2>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {appCards.map(({ svc, load, status, actionLabel }) => (
+          {appCards.map(({ id, appName, load, status, actionLabel }) => (
             <AppHealthCard
-              key={svc.id}
-              appName={svc.name}
+              key={id}
+              appName={appName}
               load={load}
               status={status}
               actionLabel={actionLabel}
-              onAction={() => handleMitigate(svc.name)}
+              onAction={() => handleMitigate(appName)}
             />
           ))}
         </div>
@@ -244,7 +245,10 @@ export default function OverviewPage() {
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6">
           <div className="flex items-center gap-2 mb-6">
             <TrendingUp className="w-5 h-5 text-blue-400" />
-            <h2 className="text-base font-semibold text-slate-50">API Consumption by Target App</h2>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-100">API Consumption by Target App</h2>
+              <div className="text-[11px] text-slate-500">Real-time request volume distribution</div>
+            </div>
           </div>
           <div style={{ width: '100%', height: 280 }}>
             <ResponsiveContainer>
@@ -269,7 +273,10 @@ export default function OverviewPage() {
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6">
           <div className="flex items-center gap-2 mb-6">
             <AlertTriangle className="w-5 h-5 text-red-400" />
-            <h2 className="text-base font-semibold text-slate-50">Top Risk Endpoints / Services</h2>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-100">Top Risk Endpoints</h2>
+              <div className="text-[11px] text-slate-500">Anomaly score / failed logins</div>
+            </div>
           </div>
           {riskData.length > 0 ? (
             <div style={{ width: '100%', height: 280 }}>
@@ -300,9 +307,15 @@ export default function OverviewPage() {
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-5 h-5 text-red-400" />
-            <h2 className="text-base font-semibold text-slate-50">Active Anomaly Mitigation</h2>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-100">Active Anomaly Mitigation</h2>
+              <div className="text-[11px] text-slate-500">Active Anomaly Mitigation</div>
+            </div>
           </div>
-          <span className="text-xs text-slate-500">{data.systemAnomalies.length} active</span>
+          <div className="flex items-center gap-3">
+            <a className="text-[11px] text-slate-400 hover:text-slate-200" href="#">View All Logs</a>
+            <span className="text-[10px] px-2 py-0.5 rounded border border-slate-700 text-slate-400">LIVE FEED</span>
+          </div>
         </div>
         {data.systemAnomalies.length > 0 ? (
           <div className="overflow-x-auto">

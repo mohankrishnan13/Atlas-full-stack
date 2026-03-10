@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { apiGet, apiPost, ApiError } from '@/lib/api';
 import { useEnvironment } from '@/context/EnvironmentContext';
-import { useToast } from '@/hooks/use-toast';
+import { toast } from 'sonner';
 import type { NetworkTrafficData, NetworkAnomaly } from '@/lib/types';
 
 function LoadingSkeleton() {
@@ -26,17 +26,14 @@ export default function NetworkTrafficPage() {
   const [data, setData] = useState<NetworkTrafficData | null>(null);
   const [loading, setLoading] = useState(true);
   const { environment } = useEnvironment();
-  const { toast } = useToast();
 
   const fetchData = () => {
     setLoading(true);
-    apiGet<NetworkTrafficData>(`/network-traffic?env=${environment}`)
+    apiGet<NetworkTrafficData>(`/network-traffic`)
       .then(setData)
       .catch((err) => {
-        toast({
-          title: 'Error',
-          description: err instanceof ApiError ? err.message : 'Failed to load network data.',
-          variant: 'destructive',
+        toast.error('Failed to load network data.', {
+          description: err instanceof ApiError ? err.message : 'Request failed.',
         });
       })
       .finally(() => setLoading(false));
@@ -47,12 +44,10 @@ export default function NetworkTrafficPage() {
   const handleBlockIp = async (sourceIp: string, app: string) => {
     try {
       await apiPost('/network-traffic/block', { sourceIp, app });
-      toast({ title: 'Network Block Applied', description: `Hard block applied for ${sourceIp} → ${app}.` });
+      toast.success('Network Block Applied', { description: `Hard block applied for ${sourceIp} → ${app}.` });
     } catch (err) {
-      toast({
-        title: 'Error',
-        description: err instanceof ApiError ? err.message : 'Block action failed.',
-        variant: 'destructive',
+      toast.error('Block action failed.', {
+        description: err instanceof ApiError ? err.message : 'Request failed.',
       });
     }
   };
@@ -67,7 +62,7 @@ export default function NetworkTrafficPage() {
   // Determine highest-bandwidth anomaly
   const highestBandwidthAnomaly = data.networkAnomalies?.[0];
   // Unauthorized MAC count from droppedPackets as proxy
-  const unknownMacs = Math.ceil(data.droppedPackets / 50);
+  const unknownMacs = Math.max(1, Math.ceil(data.droppedPackets / 50));
 
   // Unique internal targets and their statuses
   const internalTargets = [
@@ -76,6 +71,10 @@ export default function NetworkTrafficPage() {
 
   return (
     <div className="space-y-6">
+
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-medium text-slate-300">Network Traffic</div>
+      </div>
 
       {/* Top Row: Network KPIs */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -104,7 +103,7 @@ export default function NetworkTrafficPage() {
               highestBandwidthAnomaly &&
               handleBlockIp(highestBandwidthAnomaly.sourceIp, highestBandwidthAnomaly.app)
             }
-            className="mt-5 w-fit px-3 py-1.5 text-xs font-semibold text-orange-400 border border-orange-500/50 rounded hover:bg-orange-900/20 transition-colors"
+            className="mt-5 w-fit px-3 py-1.5 text-[11px] font-bold text-orange-300 border border-orange-500/30 rounded-md hover:bg-orange-900/20 transition-colors"
           >
             Throttle Bandwidth
           </button>
@@ -125,7 +124,7 @@ export default function NetworkTrafficPage() {
             </div>
             <div className="text-sm text-slate-500">
               <span className="text-slate-200 font-semibold">{data.droppedPackets.toLocaleString()}</span>{' '}
-              Dropped Packets
+              Dropped Packets/min
             </div>
           </div>
         </div>
@@ -140,17 +139,15 @@ export default function NetworkTrafficPage() {
               </h3>
             </div>
             <div className="text-xl font-bold text-red-500 mb-1">
-              {data.activeConnections} Active Connections
+              {unknownMacs} Unknown MAC Addresses
             </div>
-            <div className="text-sm text-slate-500">
-              {data.networkAnomalies?.length ?? 0} anomalous sessions detected
-            </div>
+            <div className="text-sm text-slate-500">Detected on HR-Subnet</div>
           </div>
           <button
-            className="mt-5 w-fit px-3 py-1.5 text-xs font-semibold text-red-400 border border-red-600/50 rounded hover:bg-red-900/30 transition-colors flex items-center gap-2"
+            className="mt-5 w-fit px-3 py-1.5 text-[11px] font-bold text-red-300 border border-red-600/40 rounded-md hover:bg-red-900/30 transition-colors flex items-center gap-2"
           >
             <Ban className="w-3 h-3" />
-            Block Suspicious Sessions
+            Block MAC Addresses
           </button>
         </div>
       </div>

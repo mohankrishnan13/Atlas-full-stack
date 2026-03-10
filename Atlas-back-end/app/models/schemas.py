@@ -347,3 +347,245 @@ class ContainmentRuleUpdate(BaseModel):
     soft_limit_threshold: Optional[int] = None
     hard_block_threshold: Optional[int] = None
     enabled: Optional[bool] = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Figma-Specific Endpoints (Option 2 Contract Strategy)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class CaseManagementKpis(BaseModel):
+    criticalOpenCases: int
+    mttr: str
+    unassignedEscalations: int
+
+
+class CaseManagementCase(BaseModel):
+    caseId: str
+    scopeTags: List[str]
+    aiThreatNarrative: str
+    assigneeName: str
+    assigneeInitials: str
+    status: str
+    playbookActions: List[str]
+    targetApp: str
+
+
+class CaseManagementResponse(BaseModel):
+    kpis: CaseManagementKpis
+    cases: List[CaseManagementCase]
+
+
+class AppConfigResponse(BaseModel):
+    env: str
+    appId: str
+    warningAnomalyScore: int
+    criticalAnomalyScore: int
+    softRateLimitCallsPerMin: int
+    hardBlockThresholdCallsPerMin: int
+    autoQuarantineLaptops: bool
+    trainingWindowDays: int
+    modelSensitivityPct: int
+    autoUpdateBaselinesWeekly: bool
+    baselineModelName: str
+    baselineLastUpdatedAt: str
+
+
+class AppConfigUpdateRequest(BaseModel):
+    warningAnomalyScore: Optional[int] = None
+    criticalAnomalyScore: Optional[int] = None
+    softRateLimitCallsPerMin: Optional[int] = None
+    hardBlockThresholdCallsPerMin: Optional[int] = None
+    autoQuarantineLaptops: Optional[bool] = None
+    trainingWindowDays: Optional[int] = None
+    modelSensitivityPct: Optional[int] = None
+    autoUpdateBaselinesWeekly: Optional[bool] = None
+    baselineModelName: Optional[str] = None
+
+
+class QuarantinedEndpointRow(BaseModel):
+    workstationId: str
+    user: str
+    timeQuarantined: str
+    action: str
+
+
+class QuarantinedEndpointsResponse(BaseModel):
+    autoQuarantineLaptops: bool
+    quarantined: List[QuarantinedEndpointRow]
+
+
+class LiftQuarantineRequest(BaseModel):
+    appId: str
+    workstationId: str
+
+
+class LiftQuarantineResponse(BaseModel):
+    success: bool
+    message: str
+
+
+class ScheduledReportRow(BaseModel):
+    id: int
+    title: str
+    description: str
+    schedule: str
+    active: bool
+    configureLabel: str
+
+
+class RecentDownloadRow(BaseModel):
+    id: int
+    fileName: str
+    targetAppScope: str
+    generated: str
+    size: str
+    downloadUrl: str
+
+
+class ReportsOverviewResponse(BaseModel):
+    scheduledReports: List[ScheduledReportRow]
+    recentDownloads: List[RecentDownloadRow]
+
+
+class GenerateReportRequest(BaseModel):
+    dateRange: str
+    dataSource: str
+    template: str
+    exportFormat: str
+
+
+class GenerateReportResponse(BaseModel):
+    success: bool
+    message: str
+    download: Optional[RecentDownloadRow] = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Figma Widget Contracts (Pixel-Perfect Screenshots)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class FigmaDashboardAppHealth(BaseModel):
+    targetApp: str
+    currentLoadLabel: str   # e.g. "450 req/m"
+    status: str             # "healthy" | "warning" | "critical"
+    actionLabel: str        # e.g. "Apply Hard Limit"
+
+
+class FigmaDashboardResponse(BaseModel):
+    aiBriefing: str
+    appHealth: List[FigmaDashboardAppHealth]
+
+
+class FigmaApiOveruseByApp(BaseModel):
+    targetApp: str
+    currentRpm: int
+    limitRpm: int
+
+
+class FigmaAbusedEndpointRow(BaseModel):
+    endpoint: str                 # e.g. "[GenAI] /v1/chat/completions"
+    violations: int
+    severity: str                 # "critical" | "high" | "medium"
+
+
+class FigmaTopConsumerRow(BaseModel):
+    consumer: str
+    targetApp: str                # bracketed like "[GenAI Service]"
+    callsLabel: str               # e.g. "125K"
+    costLabel: str                # e.g. "$3,250"
+    isOveruse: bool
+    actionLabel: str
+    actionType: str               # "warning" | "critical" | "neutral"
+
+
+class FigmaApiMitigationFeedRow(BaseModel):
+    target: str
+    offender: str                 # MUST include "External IP (Public): " when external IP
+    violation: str
+    details: str
+    actionLabel: str
+    actionColor: str              # "red" | "blue"
+
+
+class FigmaApiMonitoringResponse(BaseModel):
+    totalApiCallsLabel: str
+    blockedThreatsLabel: str
+    globalAvailabilityLabel: str
+    activeIncidentsLabel: str
+    apiOveruseByTargetApp: List[FigmaApiOveruseByApp]
+    mostAbusedEndpoints: List[FigmaAbusedEndpointRow]
+    topConsumersByTargetApp: List[FigmaTopConsumerRow]
+    activeMitigationFeed: List[FigmaApiMitigationFeedRow]
+
+
+class FigmaNetworkAnomalyRow(BaseModel):
+    timestamp: str
+    source: str                   # endpoint/user or "External IP (Public): x.x.x.x"
+    targetApp: str
+    port: str
+    anomalyType: str
+    firewallBlockActive: bool = False
+    controls: List[Dict[str, str]]  # [{ label, type }]
+
+
+class FigmaNetworkTrafficResponse(BaseModel):
+    activeAnomalies: List[FigmaNetworkAnomalyRow]
+
+
+class FigmaEndpointVulnerableRow(BaseModel):
+    workstationId: str
+    cves: int
+    riskLevel: str                # "Critical" | "High" | "Medium" | "Low"
+
+
+class FigmaEndpointPolicyViolatorRow(BaseModel):
+    user: str
+    violations: int
+
+
+class FigmaEndpointEventAction(BaseModel):
+    label: str
+    actionType: str               # "Kill Process" | "Quarantine Device" | "Lock USB Ports" | etc.
+
+
+class FigmaEndpointEventRow(BaseModel):
+    id: str
+    endpoint: str
+    user: str
+    threat: str
+    severity: str                 # "critical" | "high" | "warning"
+    timestamp: str
+    actions: List[FigmaEndpointEventAction]
+
+
+class FigmaEndpointSecurityResponse(BaseModel):
+    vulnerableEndpoints: List[FigmaEndpointVulnerableRow]
+    policyViolators: List[FigmaEndpointPolicyViolatorRow]
+    endpointEvents: List[FigmaEndpointEventRow]
+
+
+class FigmaDbExfiltrationRow(BaseModel):
+    targetDb: str
+    volumeGb: float
+    color: str
+
+
+class FigmaDbSuspiciousSourceRow(BaseModel):
+    name: str
+    queries: int
+
+
+class FigmaDbSuspiciousActivityRow(BaseModel):
+    id: int
+    timestamp: str
+    actor: str
+    targetDb: str
+    targetTable: str
+    risk: str
+
+
+class FigmaDatabaseMonitoringResponse(BaseModel):
+    dataExfiltrationRiskByDatabase: List[FigmaDbExfiltrationRow]
+    topSuspiciousQuerySources: List[FigmaDbSuspiciousSourceRow]
+    suspiciousDbActivity: List[FigmaDbSuspiciousActivityRow]

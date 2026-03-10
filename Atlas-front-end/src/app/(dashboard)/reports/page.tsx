@@ -17,30 +17,64 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../../components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../../../components/ui/table";
 import { apiGet, apiPost, ApiError } from "../../../lib/api";
 import { HeaderData, Application } from "../../../lib/types";
-import { useToast } from "../../../hooks/use-toast";
+import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "../../../components/ui/alert";
 import { Terminal, Download } from "lucide-react";
+
+type ScheduledReportRow = {
+  id: number;
+  title: string;
+  description: string;
+  schedule: string;
+  active: boolean;
+  configureLabel: string;
+};
+
+type RecentDownloadRow = {
+  id: number;
+  fileName: string;
+  targetAppScope: string;
+  generated: string;
+  size: string;
+  downloadUrl: string;
+};
+
+type ReportsOverviewResponse = {
+  scheduledReports: ScheduledReportRow[];
+  recentDownloads: RecentDownloadRow[];
+};
 
 export default function ReportsPage() {
   const [applications, setApplications] = useState<Application[]>([]);
   const [selectedApp, setSelectedApp] = useState<string>("");
   const [reportType, setReportType] = useState<string>("pdf");
+  const [overview, setOverview] = useState<ReportsOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
-  const { toast } = useToast();
 
   useEffect(() => {
     const fetchApplications = async () => {
       try {
         setLoading(true);
-        const data = await apiGet<HeaderData>("/header-data?env=cloud");
+        const data = await apiGet<HeaderData>("/header-data");
         setApplications(data.applications);
         if (data.applications.length > 0) {
           setSelectedApp(data.applications[0].id);
         }
+
+        const ov = await apiGet<ReportsOverviewResponse>("/reports/overview");
+        setOverview(ov);
       } catch (err) {
         if (err instanceof ApiError) {
           setError(err.message);
@@ -48,64 +82,47 @@ export default function ReportsPage() {
           setError("An unexpected error occurred.");
         }
         console.error("Failed to fetch applications for reports:", err);
-        toast({
-          title: "Error",
-          description: `Failed to load applications: ${error}`,
-          variant: "destructive",
+        toast.error("Failed to load reports data.", {
+          description: err instanceof ApiError ? err.message : "Request failed.",
         });
       } finally {
         setLoading(false);
       }
     };
     fetchApplications();
-  }, [error, toast]);
+  }, []);
 
   const handleGenerateReport = async () => {
     if (!selectedApp || !reportType) {
-      toast({
-        title: "Validation Error",
-        description: "Please select an application and report type.",
-        variant: "destructive",
-      });
+      toast.error("Please select an application and export format.");
       return;
     }
 
     setIsGenerating(true);
     try {
-      // This is a simulated API call as no explicit report generation endpoint is available.
-      // In a real scenario, this would hit an endpoint like /api/reports/generate
-      // which would return a file stream or a link to a generated report.
-      console.log(`Simulating report generation for App: ${selectedApp}, Type: ${reportType}`);
-      
-      // For demonstration, we'll simulate a file download
-      const dummyReportContent = `Report for ${selectedApp} in ${reportType} format.\n\nGenerated on: ${new Date().toLocaleString()}`; 
-      const filename = `${selectedApp}_report.${reportType}`;
-      const blob = new Blob([dummyReportContent], { type: reportType === "pdf" ? "application/pdf" : "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      const exportFormat = reportType.toLowerCase() === "pdf" ? "PDF" : "CSV";
+      const resp = await apiPost<{ success: boolean; message: string; download?: RecentDownloadRow }>(
+        "/reports/generate",
+        {
+          dateRange: "",
+          dataSource: selectedApp,
+          template: "General Security Summary",
+          exportFormat,
+        }
+      );
 
-      toast({
-        title: "Report Generated",
-        description: `Successfully generated a ${reportType.toUpperCase()} report for ${selectedApp}.`,
+      toast.success("Report Generated", {
+        description: resp.message || `Generated ${exportFormat} report for ${selectedApp}.`,
       });
+
+      const ov = await apiGet<ReportsOverviewResponse>("/reports/overview");
+      setOverview(ov);
     } catch (err) {
       if (err instanceof ApiError) {
-        toast({
-          title: "Error",
-          description: `Failed to generate report: ${err.message}`,
-          variant: "destructive",
-        });
+        toast.error("Failed to generate report.", { description: err.message });
       } else {
-        toast({
-          title: "Error",
+        toast.error("Failed to generate report.", {
           description: "An unexpected error occurred during report generation.",
-          variant: "destructive",
         });
       }
       console.error("Report generation failed:", err);
@@ -129,19 +146,24 @@ export default function ReportsPage() {
   }
 
   return (
-    <div className="flex flex-col gap-4 p-4">
-      <h1 className="text-3xl font-bold">Reports</h1>
+    <div className="space-y-6">
+      <div className="text-sm font-medium text-slate-300">Reports</div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Generate Custom Report</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="data-source">Data Source (Application)</Label>
+      <div className="bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-slate-800 rounded-lg p-5">
+        <div className="flex items-center gap-2 text-sm font-semibold text-slate-100 mb-4">
+          <Download className="w-4 h-4 text-slate-200" />
+          Generate New Report
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-[200px_1fr_1fr_170px_200px] gap-3 items-end">
+          <div className="space-y-1">
+            <Label className="text-[10px] uppercase text-slate-500">Date Range</Label>
+            <Input placeholder="Select date range" className="bg-slate-900/50 border-slate-800" />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-[10px] uppercase text-slate-500">Data Source</Label>
             <Select value={selectedApp} onValueChange={setSelectedApp}>
-              <SelectTrigger id="data-source">
-                <SelectValue placeholder="Select an application" />
+              <SelectTrigger className="bg-slate-900/50 border-slate-800">
+                <SelectValue placeholder="All Sources" />
               </SelectTrigger>
               <SelectContent>
                 {applications.map((app) => (
@@ -152,12 +174,22 @@ export default function ReportsPage() {
               </SelectContent>
             </Select>
           </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="report-type">Report Type</Label>
+          <div className="space-y-1">
+            <Label className="text-[10px] uppercase text-slate-500">Consolidate / Report Template</Label>
+            <Select value={'General Security Summary'} onValueChange={() => {}}>
+              <SelectTrigger className="bg-slate-900/50 border-slate-800">
+                <SelectValue placeholder="General Security Summary" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="General Security Summary">General Security Summary</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-[10px] uppercase text-slate-500">Export Format</Label>
             <Select value={reportType} onValueChange={setReportType}>
-              <SelectTrigger id="report-type">
-                <SelectValue placeholder="Select report type" />
+              <SelectTrigger className="bg-slate-900/50 border-slate-800">
+                <SelectValue placeholder="PDF" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="pdf">PDF</SelectItem>
@@ -165,19 +197,85 @@ export default function ReportsPage() {
               </SelectContent>
             </Select>
           </div>
-
-          <Button 
-            onClick={handleGenerateReport} 
+          <Button
+            onClick={handleGenerateReport}
             disabled={!selectedApp || !reportType || isGenerating}
-            className="w-full"
+            className="h-10 bg-blue-600 hover:bg-blue-700"
           >
-            {isGenerating ? "Generating..." : <><Download className="mr-2 h-4 w-4" /> Generate Report</>}
+            {isGenerating ? 'Generating...' : 'Generate Report'}
           </Button>
-          <p className="text-sm text-muted-foreground">
-            Note: Report generation is currently simulated. A backend endpoint for PDF/CSV generation would be integrated here.
-          </p>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <span className="w-2 h-2 rounded-full bg-emerald-500" />
+          <div className="text-sm font-semibold text-slate-100">Scheduled Reports</div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {(overview?.scheduledReports || []).map((r) => (
+            <div key={r.id} className="bg-slate-950/40 border border-slate-800 rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold text-slate-100">{r.title}</div>
+                <div className={`w-8 h-4 rounded-full border ${r.active ? 'bg-emerald-600/30 border-emerald-500/30' : 'bg-slate-900 border-slate-700'} relative`}>
+                  <div className={`w-3 h-3 rounded-full absolute top-0.5 transition-all ${r.active ? 'left-4 bg-emerald-400' : 'left-0.5 bg-slate-500'}`} />
+                </div>
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">{r.description}</div>
+              <div className="text-[11px] text-slate-500 mt-2">{r.schedule}</div>
+              <div className="mt-3 flex items-center justify-between">
+                <span className={r.active ? 'text-emerald-400 text-[11px]' : 'text-slate-500 text-[11px]'}>
+                  {r.active ? 'Active' : 'Disabled'}
+                </span>
+                <button
+                  className="text-[11px] text-blue-400 hover:text-blue-300"
+                  onClick={() => toast.info('Configure', { description: 'Not implemented yet.' })}
+                >
+                  {r.configureLabel}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
+        <div className="p-5 border-b border-slate-800 flex items-center gap-2">
+          <Download className="w-4 h-4 text-slate-300" />
+          <div className="text-sm font-semibold text-slate-100">Recent Downloads</div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="bg-slate-950 text-slate-500 uppercase text-[10px] border-b border-slate-800">
+              <tr>
+                <th className="px-6 py-3">FILE NAME</th>
+                <th className="px-6 py-3">TARGET APP/SCOPE</th>
+                <th className="px-6 py-3">GENERATED</th>
+                <th className="px-6 py-3">SIZE</th>
+                <th className="px-6 py-3 text-right">ACTIONS</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800">
+              {(overview?.recentDownloads || []).map((d) => (
+                <tr key={d.id} className="hover:bg-slate-800/30 transition-colors">
+                  <td className="px-6 py-4 text-sm text-slate-200">{d.fileName}</td>
+                  <td className="px-6 py-4 text-xs text-blue-400">{d.targetAppScope}</td>
+                  <td className="px-6 py-4 text-xs text-slate-400">{d.generated}</td>
+                  <td className="px-6 py-4 text-xs text-slate-400">{d.size}</td>
+                  <td className="px-6 py-4 text-right">
+                    <button
+                      className="text-emerald-400 hover:text-emerald-300 text-[11px]"
+                      onClick={() => window.open(d.downloadUrl, '_blank')}
+                    >
+                      Download
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }

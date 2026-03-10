@@ -1,239 +1,307 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
+import { useEffect, useMemo, useState } from "react";
+import { Search, Sparkles, Shield, Clock, AlertTriangle, Filter, Bot } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from '@/components/ui/input';
-import { Ban, Search, ShieldX, CheckCircle, LoaderCircle } from "lucide-react";
-import { cn, getSeverityClassNames } from "@/lib/utils";
-import type { Severity, Incident } from "@/lib/types";
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
-import { aiInvestigatorSummary, AiInvestigatorSummaryOutput, AiInvestigatorSummaryInput } from '@/ai/flows/ai-investigator-summary';
-import { useToast } from '@/hooks/use-toast';
-import { Skeleton } from '@/components/ui/skeleton';
-import { useEnvironment } from '@/context/EnvironmentContext';
-import { apiGet, apiPost, ApiError } from '@/lib/api';
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { cn } from "@/lib/utils";
+import { apiGet, apiPost, ApiError } from "@/lib/api";
+import { toast } from "sonner";
+import { useEnvironment } from "@/context/EnvironmentContext";
 
+type CaseManagementKpis = {
+  criticalOpenCases: number;
+  mttr: string;
+  unassignedEscalations: number;
+};
 
-function IncidentDetailSheet({ incident, open, onOpenChange }: { incident: Incident | null; open: boolean; onOpenChange: (open: boolean) => void }) {
-  const { toast } = useToast();
-  const [summary, setSummary] = useState<AiInvestigatorSummaryOutput | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [remediatingAction, setRemediatingAction] = useState<string | null>(null);
+type CaseManagementCase = {
+  caseId: string;
+  scopeTags: string[];
+  aiThreatNarrative: string;
+  assigneeName: string;
+  assigneeInitials: string;
+  status: string;
+  playbookActions: string[];
+  targetApp: string;
+};
+
+type CaseManagementResponse = {
+  kpis: CaseManagementKpis;
+  cases: CaseManagementCase[];
+};
+
+export default function CaseManagementPage() {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [data, setData] = useState<CaseManagementResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [runningAction, setRunningAction] = useState<string | null>(null);
+  const { environment } = useEnvironment();
 
   useEffect(() => {
-    if (incident && open) {
-      setIsLoading(true);
-      setSummary(null);
-      const input: AiInvestigatorSummaryInput = {
-        eventName: incident.eventName,
-        timestamp: incident.timestamp,
-        severity: incident.severity,
-        sourceIp: incident.sourceIp,
-        destinationIp: incident.destIp,
-        targetApplication: incident.targetApp,
-        eventDetails: incident.eventDetails,
-      };
-      aiInvestigatorSummary(input)
-        .then(setSummary)
-        .catch(() => {
-          toast({ title: "AI Summary Failed", description: "Could not generate AI summary.", variant: "destructive" });
-          setSummary({ summaryText: "Could not generate AI summary.", attackVector: "N/A", potentialImpact: "N/A", context: "N/A" });
-        })
-        .finally(() => setIsLoading(false));
-    }
-  }, [incident, open, toast]);
+    let cancelled = false;
+    setLoading(true);
+    apiGet<CaseManagementResponse>("/case-management")
+      .then((res) => { if (!cancelled) setData(res); })
+      .catch((err) => {
+        toast.error("Failed to load cases.", { description: err instanceof ApiError ? err.message : "Request failed." });
+        if (!cancelled) setData(null);
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [environment]);
 
-  const handleRemediation = async (action: string) => {
-    if (!incident) return;
-    setRemediatingAction(action);
-    try {
-      await apiPost<{ success: boolean; message: string }>("/incidents/remediate", { incidentId: incident.id, action });
-      toast({ title: `Action: ${action}`, description: `Action taken for incident ${incident.id}.` });
-      onOpenChange(false);
-    } catch (err: unknown) {
-      toast({
-        title: "Error",
-        description: err instanceof Error ? err.message : `Failed to perform action '${action}' for incident ${incident.id}.`,
-        variant: "destructive",
-      });
-    } finally {
-      setRemediatingAction(null);
+  const getStatusColor = (status: string) => {
+    switch (status?.toUpperCase?.()) {
+      case "OPEN":
+      case "ACTIVE":
+        return "bg-red-500 text-white border-red-500";
+      case "INVESTIGATING":
+      case "CONTAINED":
+        return "bg-transparent text-yellow-400 border-yellow-500";
+      case "RESOLVED":
+      case "CLOSED":
+        return "bg-slate-700/50 text-slate-400 border-slate-600";
+      default:
+        return "bg-slate-700/50 text-slate-400 border-slate-600";
     }
   };
 
-    if (!incident) return null;
+  const getPlaybookButtonClass = (label: string) => {
+    if (label === "Execute Total Lockdown Playbook") {
+      return "bg-red-600 hover:bg-red-700 text-white border-red-600";
+    }
+    if (label === "Assign to Me") {
+      return "bg-blue-600 hover:bg-blue-700 text-white border-blue-600";
+    }
+    if (label === "Quarantine Endpoint & Drop MAC") {
+      return "bg-transparent hover:bg-orange-600/10 text-orange-400 border-orange-600";
+    }
+    if (label === "View AI Timeline") {
+      return "bg-transparent hover:bg-blue-600/10 text-blue-400 border-blue-600";
+    }
+    return "bg-transparent hover:bg-slate-700 text-slate-400 border-slate-600";
+  };
 
-    const severityClasses = getSeverityClassNames(incident.severity);
+  const filteredCases = useMemo(() => {
+    const cases = data?.cases ?? [];
+    if (!searchQuery.trim()) return cases;
+    const q = searchQuery.toLowerCase();
+    return cases.filter((c) => (
+      c.caseId.toLowerCase().includes(q)
+      || c.targetApp.toLowerCase().includes(q)
+      || c.assigneeName.toLowerCase().includes(q)
+      || c.scopeTags.some((t) => String(t).toLowerCase().includes(q))
+      || c.aiThreatNarrative.toLowerCase().includes(q)
+    ));
+  }, [data, searchQuery]);
 
+  const inferWorkstationId = (scopeTags: string[]) => {
+    return scopeTags.find((t) => String(t).startsWith("LAPTOP-") || String(t).startsWith("WKST-") || String(t).startsWith("SRV-")) || "";
+  };
+
+  const handlePlaybook = async (caseData: CaseManagementCase, actionLabel: string) => {
+    const actionKey = `${caseData.caseId}:${actionLabel}`;
+    setRunningAction(actionKey);
+    try {
+      if (actionLabel === "Quarantine Endpoint & Drop MAC") {
+        const ws = inferWorkstationId(caseData.scopeTags);
+        if (!ws) throw new Error("No workstation_id found in case scope tags.");
+        await apiPost("/endpoint-security/quarantine", { workstationId: ws });
+        toast.success("Quarantine Action Executed", { description: `Endpoint ${ws} has been quarantined.` });
+        return;
+      }
+      await apiPost("/incidents/remediate", { incidentId: caseData.caseId, action: actionLabel });
+      toast.success("Playbook Executed", { description: `${actionLabel} initiated for ${caseData.caseId}.` });
+    } catch (err) {
+      toast.error("Playbook Failed", { description: err instanceof Error ? err.message : "Request failed." });
+    } finally {
+      setRunningAction(null);
+    }
+  };
+
+  if (loading) {
     return (
-        <Sheet open={open} onOpenChange={onOpenChange}>
-            <SheetContent className="w-[500px] sm:w-[640px] p-0">
-                <SheetHeader className="p-6 border-b">
-                    <SheetTitle className="text-2xl">{incident.id}: {incident.eventName}</SheetTitle>
-                    <SheetDescription>
-                        <span className={cn("font-semibold", severityClasses.text)}>{incident.severity}</span>
-                        <span className="text-muted-foreground"> | {incident.timestamp}</span>
-                    </SheetDescription>
-                </SheetHeader>
-                <div className="p-6 space-y-6 overflow-y-auto h-[calc(100vh-8rem)]">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>AI Investigator Summary</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            {isLoading && <div className="flex items-center gap-2 text-muted-foreground"><LoaderCircle className="animate-spin h-4 w-4" /> Generating...</div>}
-                            {summary && (
-                                <>
-                                    <div>
-                                        <h4 className="font-semibold mb-1">Summary</h4>
-                                        <p className="text-sm text-muted-foreground">{summary.summaryText}</p>
-                                    </div>
-                                    <div>
-                                        <h4 className="font-semibold mb-1">Attack Vector</h4>
-                                        <p className="text-sm text-muted-foreground">{summary.attackVector}</p>
-                                    </div>
-                                    <div>
-                                        <h4 className="font-semibold mb-1">Potential Impact</h4>
-                                        <p className="text-sm text-muted-foreground">{summary.potentialImpact}</p>
-                                    </div>
-                                    <div>
-                                        <h4 className="font-semibold mb-1">Context</h4>
-                                        <p className="text-sm text-muted-foreground">{summary.context}</p>
-                                    </div>
-                                </>
-                            )}
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Remediation Actions</CardTitle>
-                        </CardHeader>
-                        <CardContent className="flex gap-2">
-                             <Button variant="outline" disabled={!!remediatingAction} onClick={() => handleRemediation("Block IP")}>
-                               {remediatingAction === "Block IP" ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <Ban className="mr-2 h-4 w-4" />}
-                               Block IP
-                             </Button>
-                             <Button variant="outline" disabled={!!remediatingAction} onClick={() => handleRemediation("Isolate Endpoint")}>
-                               {remediatingAction === "Isolate Endpoint" ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <ShieldX className="mr-2 h-4 w-4" />}
-                               Isolate Endpoint
-                             </Button>
-                             <Button variant="secondary" disabled={!!remediatingAction} onClick={() => handleRemediation("Dismiss")}>
-                               {remediatingAction === "Dismiss" ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
-                               Dismiss
-                             </Button>
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Raw Event Details</CardTitle>
-                        </CardHeader>
-                        <CardContent className="text-sm font-mono bg-muted p-4 rounded-md text-muted-foreground break-words">
-                            {incident.eventDetails}
-                        </CardContent>
-                    </Card>
-                </div>
-            </SheetContent>
-        </Sheet>
-    );
-}
-
-export default function IncidentsPage() {
-    const [search, setSearch] = useState("");
-    const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
-    const [incidents, setIncidents] = useState<Incident[]>([]);
-    const [isLoading, setIsLoading] = useState(true);
-    const { toast } = useToast();
-    const { environment } = useEnvironment();
-
-    useEffect(() => {
-        let cancelled = false;
-        setIsLoading(true);
-        apiGet<Incident[]>(`/incidents?env=${environment}`)
-            .then((result) => { if (!cancelled) setIncidents(result); })
-            .catch((err: ApiError) => {
-                if (!cancelled) {
-                    toast({ variant: "destructive", title: "Failed to Load Incidents Data", description: err.message });
-                    setIncidents([]);
-                }
-            })
-            .finally(() => { if (!cancelled) setIsLoading(false); });
-        return () => { cancelled = true; };
-    }, [toast, environment]);
-
-    const filteredIncidents = incidents.filter(inc =>
-        Object.values(inc).some(val =>
-            String(val).toLowerCase().includes(search.toLowerCase())
-        )
-    );
-
-    return (
-        <div className="space-y-8">
-            <h1 className="text-3xl font-bold">Incidents</h1>
-            <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
-                <Input
-                    placeholder='Search incidents... (e.g., source="firewall" status="failure")'
-                    className="pl-10"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                />
-            </div>
-            <Card>
-                <CardContent className="p-0">
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>Incident ID</TableHead>
-                                <TableHead>Event</TableHead>
-                                <TableHead>Severity</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Timestamp</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {isLoading && Array.from({length: 5}).map((_, i) => (
-                                <TableRow key={i}>
-                                    <TableCell colSpan={5}><Skeleton className="h-8 w-full" /></TableCell>
-                                </TableRow>
-                            ))}
-                            {!isLoading && filteredIncidents.map((incident) => {
-                                const severityClasses = getSeverityClassNames(incident.severity as Severity);
-                                return (
-                                <TableRow key={incident.id} onClick={() => setSelectedIncident(incident)} className="cursor-pointer">
-                                    <TableCell className="font-medium text-primary">{incident.id}</TableCell>
-                                    <TableCell>{incident.eventName}</TableCell>
-                                    <TableCell>
-                                        <Badge variant="outline" className={cn(severityClasses.badge)}>{incident.severity}</Badge>
-                                    </TableCell>
-                                     <TableCell>
-                                        <Badge
-                                            className={cn(
-                                                incident.status === 'Active' && 'bg-red-500/20 text-red-400 border-red-500/30',
-                                                incident.status === 'Contained' && 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
-                                                incident.status === 'Closed' && 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-                                            )}
-                                            variant="outline"
-                                        >
-                                            {incident.status}
-                                        </Badge>
-                                    </TableCell>
-                                    <TableCell>{incident.timestamp}</TableCell>
-                                </TableRow>
-                            )})}
-                            {!isLoading && filteredIncidents.length === 0 && (
-                                <TableRow>
-                                    <TableCell colSpan={5} className="text-center text-muted-foreground">No incidents found.</TableCell>
-                                </TableRow>
-                            )}
-                        </TableBody>
-                    </Table>
-                </CardContent>
-            </Card>
-
-            <IncidentDetailSheet incident={selectedIncident} open={!!selectedIncident} onOpenChange={(open) => !open && setSelectedIncident(null)} />
+      <div className="space-y-6">
+        <div className="h-8 w-64 bg-slate-800 rounded animate-pulse" />
+        <div className="h-16 bg-slate-800 rounded animate-pulse" />
+        <div className="grid grid-cols-3 gap-4">
+          <div className="h-20 bg-slate-800 rounded animate-pulse" />
+          <div className="h-20 bg-slate-800 rounded animate-pulse" />
+          <div className="h-20 bg-slate-800 rounded animate-pulse" />
         </div>
+        <div className="h-64 bg-slate-800 rounded animate-pulse" />
+      </div>
     );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Page Title */}
+      <div>
+        <h1 className="text-2xl font-semibold text-slate-200">Case Management</h1>
+        <p className="text-sm text-slate-400 mt-1">Enterprise threat correlation and active case orchestration</p>
+      </div>
+
+      {/* Action Bar */}
+      <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+        <div className="flex gap-3">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-500" />
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10 bg-slate-950 border-slate-800 text-slate-200"
+              placeholder="Search Case ID, App, or Analyst..."
+            />
+          </div>
+          <Button variant="outline" className="bg-slate-950 border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-200">
+            <Filter className="w-4 h-4 mr-2" />
+            Filter by Target App
+          </Button>
+        </div>
+      </div>
+
+      {/* KPI Row - Workflow Metrics */}
+      <div className="grid grid-cols-3 gap-4">
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-red-500/10 rounded-lg relative">
+              <Shield className="w-5 h-5 text-red-500" />
+              <div className="absolute inset-0 rounded-lg bg-red-500 opacity-20 animate-pulse"></div>
+            </div>
+            <div>
+              <div className="text-2xl font-semibold text-red-400">{data?.kpis.criticalOpenCases ?? 0}</div>
+              <div className="text-sm text-slate-400">Critical Open Cases</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-green-500/10 rounded-lg">
+              <Clock className="w-5 h-5 text-green-500" />
+            </div>
+            <div>
+              <div className="text-2xl font-semibold text-green-400">{data?.kpis.mttr ?? "—"}</div>
+              <div className="text-sm text-slate-400">Mean Time to Resolve (MTTR)</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-orange-500/10 rounded-lg">
+              <AlertTriangle className="w-5 h-5 text-orange-500" />
+            </div>
+            <div>
+              <div className="text-2xl font-semibold text-orange-400">{data?.kpis.unassignedEscalations ?? 0}</div>
+              <div className="text-sm text-slate-400">Unassigned Escalations</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Case Board - Threat Correlation Table */}
+      <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
+        <div className="border-b border-slate-800 bg-slate-950">
+          <div className="grid grid-cols-[180px_1fr_200px_300px] gap-4 px-6 py-3 text-xs text-slate-400 uppercase font-medium tracking-wide">
+            <div>Case ID & Scope</div>
+            <div>AI Threat Narrative</div>
+            <div>Assignee & Status</div>
+            <div>Playbook Responses</div>
+          </div>
+        </div>
+
+        <div className="divide-y divide-slate-800">
+          {filteredCases.map((caseData) => (
+            <div
+              key={caseData.caseId}
+              className="grid grid-cols-[180px_1fr_200px_300px] gap-4 px-6 py-5 hover:bg-slate-800/30 transition-colors"
+            >
+              <div className="space-y-2">
+                <div className="text-sm font-semibold text-blue-400 font-mono">{caseData.caseId}</div>
+                <div className="flex flex-col gap-1.5">
+                  {caseData.scopeTags.map((tag, idx) => (
+                    <Badge
+                      key={idx}
+                      className="bg-purple-500/20 text-purple-300 border border-purple-500/50 text-xs w-fit"
+                    >
+                      {tag}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2">
+                <Sparkles className="w-4 h-4 text-blue-400 mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-slate-300 leading-relaxed">{caseData.aiThreatNarrative}</p>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  {caseData.assigneeName === "System (Auto)" ? (
+                    <>
+                      <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center">
+                        <Bot className="w-4 h-4 text-slate-400" />
+                      </div>
+                      <span className="text-sm text-slate-400">System (Auto)</span>
+                    </>
+                  ) : caseData.assigneeName && caseData.assigneeName !== "Unassigned" ? (
+                    <>
+                      <Avatar className="w-8 h-8">
+                        <AvatarFallback className="bg-blue-600 text-white text-xs">
+                          {caseData.assigneeInitials || caseData.assigneeName.split(" ").map((n) => n[0]).join("")}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span className="text-sm text-slate-200">{caseData.assigneeName}</span>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center">
+                        <span className="text-xs text-slate-400">?</span>
+                      </div>
+                      <span className="text-sm text-slate-400">Unassigned</span>
+                    </>
+                  )}
+                </div>
+
+                <Badge className={cn("text-xs font-semibold w-fit", getStatusColor(caseData.status))}>
+                  {caseData.status.toUpperCase()}
+                </Badge>
+              </div>
+
+              <div className="flex flex-wrap gap-2 justify-end">
+                {caseData.playbookActions.map((label) => {
+                  const key = `${caseData.caseId}:${label}`;
+                  return (
+                    <button
+                      key={label}
+                      onClick={() => handlePlaybook(caseData, label)}
+                      disabled={runningAction === key}
+                      className={cn(
+                        "px-3 py-2 text-xs font-semibold rounded border transition-colors",
+                        getPlaybookButtonClass(label),
+                        runningAction === key && "opacity-60 cursor-not-allowed"
+                      )}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+
+          {filteredCases.length === 0 && (
+            <div className="px-6 py-10 text-center text-slate-500 text-sm">
+              No cases match your search.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }

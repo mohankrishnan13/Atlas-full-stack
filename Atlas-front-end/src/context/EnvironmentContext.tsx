@@ -6,8 +6,9 @@ import React, {
   useState,
   ReactNode,
 } from "react";
+import { getActiveEnv, setActiveEnv, type AtlasEnv } from "@/lib/api";
 
-type Environment = "cloud" | "local";
+type Environment = AtlasEnv;
 
 interface EnvironmentContextType {
   environment: Environment;
@@ -19,7 +20,12 @@ const EnvironmentContext = createContext<EnvironmentContextType | undefined>(
 );
 
 export function EnvironmentProvider({ children }: { children: ReactNode }) {
-  const [environment, setEnvironment] = useState<Environment>("cloud");
+  const [environment, setEnvironmentState] = useState<Environment>(getActiveEnv());
+
+  const setEnvironment = (env: Environment) => {
+    setEnvironmentState(env);
+    setActiveEnv(env);
+  };
 
   return (
     <EnvironmentContext.Provider value={{ environment, setEnvironment }}>
