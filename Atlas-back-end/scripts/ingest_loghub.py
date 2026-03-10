@@ -1,6 +1,5 @@
 import asyncio
 import csv
-import os
 import random
 import uuid
 from datetime import datetime, timezone
@@ -153,21 +152,18 @@ async def _ensure_seed_config(db: AsyncSession) -> None:
     await db.flush()
 
 
-async def ingest_loghub(data_root: Path, batch_size: int = 2000) -> None:
+async def ingest_loghub_data(db: AsyncSession, data_root: Path, batch_size: int = 2000) -> None:
     settings = get_settings()
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
-    SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
     files: list[tuple[str, Path]] = []
     for p in data_root.rglob("*_structured.csv"):
         if p.is_file():
             files.append((p.parent.name.lower(), p))
 
-    async with SessionLocal() as db:
-        async with db.begin():
-            await _ensure_seed_config(db)
+    # Seeding should be handled separately on startup, not during log ingestion.
+    await _ensure_seed_config(db)
 
-        for dataset, csv_path in sorted(files, key=lambda x: str(x[1])):
+    for dataset, csv_path in sorted(files, key=lambda x: str(x[1])):
             table = None
             if "apache" in dataset:
                 table = "api"
@@ -181,8 +177,8 @@ async def ingest_loghub(data_root: Path, batch_size: int = 2000) -> None:
                 continue
 
             buffer = []
-            async with db.begin():
-                for row in _iter_csv_rows(csv_path):
+            # The calling function should manage the transaction.
+            for row in _iter_csv_rows(csv_path):
                     env = _pick_env()
                     target_app = _pick_target_app()
                     line_id = _parse_int(_safe_get(row, "LineId"), default=0) or None
@@ -213,13 +209,13 @@ async def ingest_loghub(data_root: Path, batch_size: int = 2000) -> None:
                                 target_app=target_app,
                                 severity=severity,
                                 source_ip=_pick_source_ip(),
-                                app=target_app,
-                                path=random.choice(["/login", "/signup", "/checkout", "/search", "/profile"]),
-                                method=random.choice(["GET", "POST", "PUT"]),
-                                cost_per_call=round(random.uniform(0.001, 0.02), 4),
-                                trend_pct=random.randint(-10, 25),
-                                action=random.choice(["OK", "OK", "Rate-Limited", "Blocked"]),
-                                calls_today=0,
+                                app=target_app, # TODO: Parse from content
+                                path="/", # TODO: Parse from content
+                                method="GET", # TODO: Parse from content
+                                cost_per_call=0.0, # TODO: Calculate or assign based on path
+                                trend_pct=0,
+                                action="OK", # TODO: Determine from status code in content
+                                calls_today=1,
                                 blocked_count=0,
                                 avg_latency_ms=round(random.uniform(30, 900), 1),
                                 estimated_cost=round(random.uniform(0.0, 0.5), 4),
@@ -245,14 +241,9 @@ async def ingest_loghub(data_root: Path, batch_size: int = 2000) -> None:
                                 source_ip=_pick_source_ip(),
                                 dest_ip=_pick_dest_ip(),
                                 app=target_app,
-                                port=random.choice([22, 80, 443, 3389, 3306]),
-                                anomaly_type=random.choice([
-                                    "Suspicious Activity",
-                                    "Brute Force Attempt",
-                                    "Port Scan",
-                                    "Unusual Connection Pattern",
-                                ]),
-                                bandwidth_pct=random.randint(1, 100),
+                                port=0, # TODO: Parse from content
+                                anomaly_type="Unknown", # TODO: Classify based on content
+                                bandwidth_pct=0,
                                 active_connections=random.randint(1, 5000),
                                 dropped_packets=random.randint(0, 500),
                                 raw_payload=raw_payload,
@@ -265,33 +256,11 @@ async def ingest_loghub(data_root: Path, batch_size: int = 2000) -> None:
                             "mac": "macOS",
                         }.get(dataset, "Unknown")
 
-                        # --- Enhanced alert generation for realism ---
-                        alert_category = random.choice([
-                            "Malware", "Policy Violation", "USB Activity", "Login Attempts", "File Changes"
-                        ])
-                        alert_msg = content or f"Generic {alert_category} event"
-                        is_malware_flag = False
+                        # TODO: Implement real parsing of 'content' to determine these values
+                        alert_category = "Generic"
+                        alert_msg = content or "Generic event"
+                        is_malware_flag = "malware" in alert_msg.lower()
 
-                        if alert_category == "Malware":
-                            alert_msg = random.choice([
-                                "Cryptominer detected (xmrig.exe)",
-                                "Unauthorized remote session (sshd)",
-                                "Suspicious process detected (powershell.exe)",
-                                "Ransomware behavior pattern observed"
-                            ])
-                            severity = "Critical"
-                            is_malware_flag = True
-                        elif alert_category == "Policy Violation":
-                            alert_msg = random.choice([
-                                "Antivirus disabled",
-                                "Firewall disabled",
-                                "Unapproved software installed: qbittorrent.exe",
-                                "System policy violation: GPO-Security-Baseline"
-                            ])
-                            severity = "High"
-                        else:
-                            # Keep existing logic for other categories
-                            is_malware_flag = (severity in ["Critical", "High"]) and (random.random() < 0.2)
 
                         buffer.append(
                             EndpointLog(
@@ -305,16 +274,14 @@ async def ingest_loghub(data_root: Path, batch_size: int = 2000) -> None:
                                 event_template=event_template,
                                 target_app=target_app,
                                 workstation_id=f"{os_name[:2].upper()}-{random.randint(100,999)}",
-                                employee=random.choice([
-                                    "john.doe", "sarah.smith", "mike.johnson", "emily.williams", "david.brown",
-                                ]),
+                                employee="unknown", # TODO: Parse from content
                                 avatar="https://i.pravatar.cc/150?img=12",
                                 alert_message=alert_msg,
                                 alert_category=alert_category,
                                 severity=severity,
                                 os_name=os_name,
-                                is_offline=random.random() < 0.1,
-                                is_malware=is_malware_flag,
+                                is_offline=False,
+                                is_malware=is_malware_flag, # TODO: Determine from content
                                 raw_payload=raw_payload,
                             )
                         )
@@ -332,12 +299,12 @@ async def ingest_loghub(data_root: Path, batch_size: int = 2000) -> None:
                                 target_app=target_app,
                                 severity=severity,
                                 app=target_app,
-                                db_user=random.choice(["postgres", "app_user", "readonly"]),
-                                query_type=random.choice(["SELECT", "INSERT", "UPDATE", "DELETE"]),
-                                target_table=random.choice(["users", "orders", "payments", "sessions"]),
-                                reason="",
-                                is_suspicious=random.random() < 0.08,
-                                active_connections=random.randint(1, 200),
+                                db_user="unknown", # TODO: Parse from content
+                                query_type="UNKNOWN", # TODO: Parse from content
+                                target_table="unknown", # TODO: Parse from content
+                                reason="", # TODO: Classify based on content
+                                is_suspicious=False, # TODO: Determine from content
+                                active_connections=0,
                                 avg_latency_ms=round(random.uniform(1, 1200), 1),
                                 data_export_volume_tb=round(random.uniform(0.0, 2.5), 3),
                                 hour_label="",
@@ -352,45 +319,23 @@ async def ingest_loghub(data_root: Path, batch_size: int = 2000) -> None:
                     # ── Memory Leak Fix ──
                     if len(buffer) >= batch_size:
                         db.add_all(buffer)
-                        await db.flush()  # Crucial: Push to Postgres and clear session memory
+                        await db.flush()
                         buffer.clear()
 
-                if buffer:
-                    db.add_all(buffer)
-                    await db.flush()
-                    buffer.clear()
-
-            # Post-ingest: create a few alerts per file to populate header
-            async with db.begin():
-                for _ in range(3):
-                    env = _pick_env()
-                    target_app = _pick_target_app()
-                    a = Alert(
-                        alert_id=str(uuid.uuid4()),
-                        env=env,
-                        line_id=None,
-                        timestamp=_utcnow(),
-                        level=None,
-                        component=None,
-                        content=None,
-                        event_id=None,
-                        event_template=None,
-                        target_app=target_app,
-                        source_ip=_pick_source_ip(),
-                        app=target_app,
-                        message=f"{dataset} ingest event: suspicious activity detected",
-                        severity=random.choice(["Critical", "High", "Medium"]),
-                        timestamp_label="just now",
-                        raw_payload={"dataset": dataset, "source": str(csv_path)},
-                    )
-                    db.add(a)
-
-    await engine.dispose()
+                    if buffer:
+                        db.add_all(buffer)
+                        await db.flush()
+                        buffer.clear()
 
 
 def main() -> None:
     data_root = Path(__file__).resolve().parents[1] / "data" / "logs"
-    asyncio.run(ingest_loghub(data_root=data_root))
+    engine = create_async_engine(get_settings().database_url)
+    SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+    async def run():
+        async with SessionLocal() as db:
+            await ingest_loghub_data(db, data_root=data_root)
+    asyncio.run(run())
 
 
 if __name__ == "__main__":

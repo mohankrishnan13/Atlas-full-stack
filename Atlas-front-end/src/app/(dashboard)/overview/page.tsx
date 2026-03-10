@@ -62,7 +62,7 @@ function AppHealthCard({ appName, load, status, actionLabel, onAction }: { appNa
     healthy: { badge: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30', label: 'Healthy', btn: 'bg-emerald-900/40 hover:bg-emerald-900/60 text-emerald-200 border border-emerald-700/40', border: 'border-slate-800' },
   }[status];
 
-  const expandedLoad = load.replace(/req\/m/gi, 'Requests per Minute').replace(/(\d+)%\s*Cap/gi, '$1% Capacity').replace(/GB\/s/gi, 'GB/s');
+  const expandedLoad = load?.replace(/req\/m/gi, 'Requests per Minute')?.replace(/(\d+)%\s*Cap/gi, '$1% Capacity')?.replace(/GB\/s/gi, 'GB/s');
 
   return (
     <div className={`bg-slate-900 border rounded-xl p-4 flex flex-col gap-3 ${cfg.border} h-full`}>
@@ -212,7 +212,7 @@ export default function OverviewPage() {
       </div>
 
       {/* Live Attack Surface Topology */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+      {/* <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
         <SectionHeader icon={<Zap className="w-4 h-4 text-emerald-400" />} title="Live Attack Surface" subtitle="Real-time visualization of traffic flow and security filtering." tooltip="Shows traffic from external sources, through the WAF, to internal applications." />
         <div className="relative w-full">
           <svg className="absolute top-0 left-0 w-full h-full" style={{ pointerEvents: 'none' }}>
@@ -247,7 +247,7 @@ export default function OverviewPage() {
             </div>
           </div>
         </div>
-      </div>
+      </div> */}
     </div>
   );
 }

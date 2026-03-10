@@ -17,7 +17,8 @@ import { useAuth } from '@/context/AuthContext';
 import { apiGet, apiPost, apiPut, apiDelete, ApiError } from '@/lib/api';
 import { toast } from 'sonner';
 
-type Tab = 'general' | 'alert-tuning' | 'containment' | 'ml-baselines' | 'user-access';
+// type Tab = 'general' | 'alert-tuning' | 'containment' | 'ml-baselines' | 'user-access';
+type Tab = 'user-access';
 
 const navItems = [
   { id: 'general',      label: 'General',                icon: Cog },
