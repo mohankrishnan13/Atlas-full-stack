@@ -47,6 +47,7 @@ from app.core.database import AsyncSessionLocal, close_db, create_all_tables
 from app.services.auth_service import seed_default_admin
 from app.services.log_ingestion import ingest_all_logs
 from app.services.s3_ingestor import run_s3_ingest_loop
+from sqlalchemy import text
 
 logging.basicConfig(
     level=logging.INFO,
@@ -216,7 +217,7 @@ async def health():
     db_status = "unknown"
     try:
         async with AsyncSessionLocal() as session:
-            await session.execute(__import__("sqlalchemy").text("SELECT 1"))
+            await session.execute(text("SELECT 1"))
             db_status = "connected"
     except Exception as exc:
         db_status = f"error: {exc}"

@@ -6,6 +6,31 @@
 #   docker-compose logs -f atlas  # Stream backend logs
 #   docker-compose down -v        # Stop and remove volumes
 
+# ═══════════════════════════════════════════════════════════════════════
+# ATLAS SOC Dashboard — Docker Compose
+#
+# Default mode: DEVELOPMENT
+#  - FastAPI auto-reload
+#  - Source code mounted
+#  - PostgreSQL exposed
+#
+# To switch to PRODUCTION:
+#  1. Replace Dockerfile.dev with Dockerfile
+#  2. Remove the source code mount
+#  3. Change port from 8010 → 8000
+#  4. Remove PostgreSQL external port
+#  5. Use multiple workers in Dockerfile
+#
+# Run:
+#   docker compose up
+#
+# Stop:
+#   docker compose down
+#
+# Remove DB volume:
+#   docker compose down -v
+# ═══════════════════════════════════════════════════════════════════════
+
 services:
 
   # ── PostgreSQL ──────────────────────────────────────────────────────────────
@@ -13,17 +38,28 @@ services:
     image: postgres:16-alpine
     container_name: atlas-postgres
     restart: unless-stopped
+
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       # Enable PL/pgSQL for advanced stored procedures (future use)
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+
+    # DEV: allow connecting from host (psql, DBeaver etc)
     ports:
       - "5432:5432"
+
+    # PROD: remove this block so DB is internal only
+    # ports:
+    #   - "5432:5432"
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+      # Optional DB bootstrap script
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -33,77 +69,66 @@ services:
 
   # ── ATLAS Backend ───────────────────────────────────────────────────────────
   atlas:
+
+    # DEV: build hot-reload container
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
+
+    # PROD: switch to production Dockerfile
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+
     container_name: atlas-backend
     restart: unless-stopped
+
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      - "8000:8000"
 
-    # Load environment variables from .env (not committed)
+    # DEV port (matches Dockerfile.dev uvicorn port)
+    ports:
+      - "8010:8010"
+
+    # PROD port (uncomment and remove DEV port above)
+    # ports:
+    #   - "8000:8000"
+
+    # Load environment variables
     env_file:
       - .env
 
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      DATABASE_URL_SYNC: ${DATABASE_URL_SYNC}
-
-      APP_NAME: ${APP_NAME}
-      APP_ENV: ${APP_ENV}
-      DEBUG: ${DEBUG}
-
-      DB_POOL_SIZE: ${DB_POOL_SIZE}
-      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW}
-      DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT}
-      DB_ECHO_SQL: ${DB_ECHO_SQL}
-
-      LOG_DATA_DIR: ${LOG_DATA_DIR}
-      REINGEST_ON_STARTUP: ${REINGEST_ON_STARTUP}
-
-      VELOCIRAPTOR_WEBHOOK_SECRET: ${VELOCIRAPTOR_WEBHOOK_SECRET}
-      VELOCIRAPTOR_API_URL: ${VELOCIRAPTOR_API_URL}
-      VELOCIRAPTOR_API_KEY: ${VELOCIRAPTOR_API_KEY}
-
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
-      OLLAMA_MODEL: ${OLLAMA_MODEL}
-
-      SECRET_KEY: ${SECRET_KEY}
-      ALGORITHM: ${ALGORITHM}
-      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
-
-      RISK_WARN_THRESHOLD: ${RISK_WARN_THRESHOLD}
-      RISK_SOFT_LIMIT_THRESHOLD: ${RISK_SOFT_LIMIT_THRESHOLD}
-      RISK_HARD_BLOCK_THRESHOLD: ${RISK_HARD_BLOCK_THRESHOLD}
-      ANOMALY_SCORE_THRESHOLD: ${ANOMALY_SCORE_THRESHOLD}
-
-      INGEST_API_KEY: ${INGEST_API_KEY}
-      INGEST_API_KEY_HEADER: ${INGEST_API_KEY_HEADER}
-      INGEST_MAX_BATCH_SIZE: ${INGEST_MAX_BATCH_SIZE}
-
-      S3_ENABLED: ${S3_ENABLED}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-      AWS_REGION: ${AWS_REGION}
-      S3_LOG_BUCKET: ${S3_LOG_BUCKET}
-      S3_LOG_PREFIX: ${S3_LOG_PREFIX}
-      S3_POLL_INTERVAL_SECONDS: ${S3_POLL_INTERVAL_SECONDS}
-      S3_MAX_KEYS_PER_POLL: ${S3_MAX_KEYS_PER_POLL}
-
     volumes:
-      # Mount the log files directory for live editing during development
+
+      # DEV: mount source code for hot reload
+      - .:/app
+
+      # PROD: remove the line above completely
+
+      # Shared logs
       - ./data/logs:/app/data/logs:ro
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+
+      # DEV health endpoint
+      test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
+
+      # PROD: change to
+      # test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
 
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ── Persistent Volumes ───────────────────────────────────────────────────────────
 volumes:
   postgres_data:
     driver: local
