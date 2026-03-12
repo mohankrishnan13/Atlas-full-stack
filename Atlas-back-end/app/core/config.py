@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     velociraptor_api_url: str = "https://localhost:8001"  # gRPC API endpoint
     velociraptor_api_key: str = ""                         # API key / cert path
 
+    # Wazuh
+    wazuh_api_url: str = "https://localhost:55000"
+    wazuh_username: str = "wazuh"
+    wazuh_password: str = "wazuh_password"
+
     # ── Ollama LLM Copilot (optional — gracefully degraded if unavailable) ────
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3"
