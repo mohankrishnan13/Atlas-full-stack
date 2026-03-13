@@ -1,23 +1,15 @@
 'use client';
 
-/**
- * src/lib/api.ts — ATLAS Centralized API Client
- *
- * Features:
- * - Auto-attaches JWT Bearer token from localStorage
- * - Auto-injects the active environment (cloud vs local) into query params
- * - Global 401 handler: clears token and redirects to /login
- * - Safely handles FormData (file uploads) without breaking boundaries
- * - Typed helpers: apiGet, apiPost, apiPut, apiPatch, apiDelete
- */
+import {
+  mockOverviewData,
+  mockApiMonitoringData,
+  mockNetworkTrafficData,
+  mockEndpointSecurityData,
+  mockDbMonitoringData,
+  mockCaseManagementData,
+} from './mock-data';
 
-const getBaseUrl = (): string =>
-  process.env.NEXT_PUBLIC_ATLAS_BACKEND_URL || 'http://localhost:8000';
-
-const getToken = (): string | null =>
-  typeof window !== 'undefined' ? localStorage.getItem('atlas_auth_token') : null;
-
-// ── NEW: Environment State Manager ──
+// ── NEW: Environment State Manager (kept for UI compatibility) ──
 export type AtlasEnv = 'cloud' | 'local';
 
 export const getActiveEnv = (): AtlasEnv =>
@@ -31,46 +23,7 @@ export const setActiveEnv = (env: AtlasEnv) => {
   }
 };
 
-/** Low-level fetch. Returns raw Response. Handles 401 globally. */
-export const apiFetch = async (
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<Response> => {
-  
-  // 1. Setup Headers dynamically (Fix for FormData file uploads)
-  const headers = new Headers(options.headers || {});
-  if (!(options.body instanceof FormData) && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
-  }
-
-  // 2. Attach JWT
-  const token = getToken();
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-
-  // 3. Auto-Inject the Environment Query Parameter
-  // We skip this for auth login routes since they don't need the env query param
-  let finalEndpoint = endpoint;
-  if (!finalEndpoint.includes('env=') && !finalEndpoint.includes('/auth/login')) {
-    const env = getActiveEnv();
-    finalEndpoint += finalEndpoint.includes('?') ? `&env=${env}` : `?env=${env}`;
-  }
-
-  // 4. Execute the Network Request
-  const response = await fetch(`${getBaseUrl()}${finalEndpoint}`, { ...options, headers });
-
-  // 5. Global 401 Unauthorized Interceptor
-  if (response.status === 401 && typeof window !== 'undefined') {
-    console.warn('[ATLAS] Session expired or unauthorized — redirecting to login.');
-    localStorage.removeItem('atlas_auth_token');
-    window.location.href = '/login';
-    // Return a dangling promise to stop React execution while the browser redirects
-    return new Promise(() => {}); 
-  }
-
-  return response;
-};
-
-/** Thrown by typed helpers on non-OK responses. */
+// Thrown by typed helpers on non-OK responses (kept for type compatibility).
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -78,60 +31,71 @@ export class ApiError extends Error {
   }
 }
 
-async function parseError(res: Response): Promise<string> {
-  try {
-    const body = await res.json();
-    return body.detail || body.message || `Request failed (${res.status})`;
-  } catch {
-    return `Request failed (${res.status})`;
-  }
-}
+const SIMULATED_DELAY_MS = 400;
 
-// ── Typed Wrapper Methods ──
+// ── MOCKED Typed Wrapper Methods ──
 
 export async function apiGet<T>(endpoint: string): Promise<T> {
-  const res = await apiFetch(endpoint);
-  if (!res.ok) throw new ApiError(res.status, await parseError(res));
-  return res.json();
+  console.log(`[MOCK API GET] Intercepted request for: ${endpoint}`);
+  
+  // Simulate network latency
+  await new Promise(res => setTimeout(res, SIMULATED_DELAY_MS));
+
+  // Route to the correct mock data based on the endpoint
+  if (endpoint.includes('/overview')) {
+    return Promise.resolve(mockOverviewData as T);
+  }
+  if (endpoint.includes('/api-monitoring')) {
+    return Promise.resolve(mockApiMonitoringData as T);
+  }
+  if (endpoint.includes('/network-traffic')) {
+    return Promise.resolve(mockNetworkTrafficData as T);
+  }
+  if (endpoint.includes('/endpoint-security')) {
+    return Promise.resolve(mockEndpointSecurityData as T);
+  }
+  if (endpoint.includes('/database-monitoring')) {
+    return Promise.resolve(mockDbMonitoringData as T);
+  }
+  if (endpoint.includes('/case-management')) {
+    return Promise.resolve(mockCaseManagementData as T);
+  }
+
+  // Fallback for any unhandled endpoint
+  console.warn(`[MOCK API GET] No mock data found for endpoint: ${endpoint}`);
+  return Promise.reject(new ApiError(404, `No mock data for ${endpoint}`));
 }
 
-export async function apiPost<T = unknown>(endpoint: string, body?: unknown): Promise<T> {
-  const isFormData = body instanceof FormData;
-  const res = await apiFetch(endpoint, {
-    method: 'POST',
-    body: isFormData ? (body as FormData) : JSON.stringify(body),
-  });
-  if (!res.ok) throw new ApiError(res.status, await parseError(res));
-  return res.json();
+export async function apiPost<T = { success: boolean }>(endpoint: string, body?: unknown): Promise<T> {
+  console.log(`[MOCK API POST] Intercepted action for: ${endpoint}`, { body });
+
+  // Simulate network latency
+  await new Promise(res => setTimeout(res, SIMULATED_DELAY_MS));
+
+  // For all POST actions, simulate a successful response
+  return Promise.resolve({ success: true } as T);
 }
 
-export async function apiPut<T = unknown>(endpoint: string, body?: unknown): Promise<T> {
-  const isFormData = body instanceof FormData;
-  const res = await apiFetch(endpoint, {
-    method: 'PUT',
-    body: isFormData ? (body as FormData) : JSON.stringify(body),
-  });
-  if (!res.ok) throw new ApiError(res.status, await parseError(res));
-  return res.json();
+// Mock other methods to prevent errors, returning a simple success response.
+export async function apiPut<T = { success: boolean }>(endpoint: string, body?: unknown): Promise<T> {
+  console.log(`[MOCK API PUT] Intercepted action for: ${endpoint}`, { body });
+  await new Promise(res => setTimeout(res, SIMULATED_DELAY_MS));
+  return Promise.resolve({ success: true } as T);
 }
 
-export async function apiPatch<T = unknown>(endpoint: string, body?: unknown): Promise<T> {
-  const isFormData = body instanceof FormData;
-  const res = await apiFetch(endpoint, {
-    method: 'PATCH',
-    body: isFormData ? (body as FormData) : JSON.stringify(body),
-  });
-  if (!res.ok) throw new ApiError(res.status, await parseError(res));
-  return res.json();
+export async function apiPatch<T = { success: boolean }>(endpoint: string, body?: unknown): Promise<T> {
+  console.log(`[MOCK API PATCH] Intercepted action for: ${endpoint}`, { body });
+  await new Promise(res => setTimeout(res, SIMULATED_DELAY_MS));
+  return Promise.resolve({ success: true } as T);
 }
 
-export async function apiDelete<T = unknown>(endpoint: string): Promise<T> {
-  const res = await apiFetch(endpoint, { method: 'DELETE' });
-  if (!res.ok) throw new ApiError(res.status, await parseError(res));
-  return res.json();
+export async function apiDelete<T = { success: boolean }>(endpoint: string): Promise<T> {
+  console.log(`[MOCK API DELETE] Intercepted action for: ${endpoint}`);
+  await new Promise(res => setTimeout(res, SIMULATED_DELAY_MS));
+  return Promise.resolve({ success: true } as T);
 }
 
-// ── Utility ──
+// ── Utility (kept for UI compatibility) ──
 export const logout = () => {
   if (typeof window !== 'undefined') {
     localStorage.removeItem('atlas_auth_token');
