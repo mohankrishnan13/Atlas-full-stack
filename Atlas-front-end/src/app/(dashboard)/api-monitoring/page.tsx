@@ -59,7 +59,7 @@ export default function ApiMonitoringPage() {
 
   useEffect(() => {
     setLoading(true);
-    apiGet<APIMonitoringData>(`/api_monitoring`).then(setData).catch(err => toast.error('Failed to load API data.', { description: err instanceof ApiError ? err.message : 'Request failed.' })).finally(() => setLoading(false));
+    apiGet<APIMonitoringData>(`/api-monitoring`).then(setData).catch(err => toast.error('Failed to load API data.', { description: err instanceof ApiError ? err.message : 'Request failed.' })).finally(() => setLoading(false));
   }, [environment]);
 
   const handleBlockRoute = async (app_name: string, path: string) => {
