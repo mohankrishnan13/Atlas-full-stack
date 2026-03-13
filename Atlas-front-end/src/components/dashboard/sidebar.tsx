@@ -23,7 +23,7 @@ const navItems = [
   { icon: Activity, label: 'API Monitoring', href: '/api-monitoring' },
   { icon: Network, label: 'Network Traffic', href: '/network-traffic' },
   { icon: Laptop, label: 'Endpoint Security', href: '/endpoint-security' },
-  { icon: Database, label: 'Database Monitoring', href: '/database-monitoring' },
+  // { icon: Database, label: 'Database Monitoring', href: '/database-monitoring' },
   { icon: AlertTriangle, label: 'Case Management', href: '/incidents' },
   { icon: FileText, label: 'Reports', href: '/reports' },
   { icon: Settings, label: 'Settings', href: '/settings' },
