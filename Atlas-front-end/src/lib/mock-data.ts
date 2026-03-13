@@ -1,3 +1,12 @@
+export const mockHeaderData = {
+  applications: [
+    { id: "auth-service", name: "Auth Service" },
+    { id: "payments-api", name: "Payments API" },
+    { id: "network-gateway", name: "Network Gateway" },
+    { id: "endpoint-fleet", name: "Endpoint Fleet" }
+  ]
+};
+
 // Includes both standard backend keys and Figma-specific keys so it works on any UI branch
 export const mockOverviewData = {
   apiRequests: 1258345,
@@ -77,23 +86,78 @@ export const mockNetworkTrafficData = {
 };
 
 export const mockEndpointSecurityData = {
-  monitoredEndpoints: 1250,
-  offlineEndpoints: 15,
+  monitoredLaptops: 1250,
+  offlineDevices: 15,
   malwareAlerts: 3,
-  policyViolations: 24,
-  highRiskUsers: 5,
-  vulnerableEndpoints: [
-    { workstation_id: 'WKST-2088', vulnerability_count: 14 },
-    { workstation_id: 'LAPTOP-DEV-04', vulnerability_count: 8 },
-    { workstation_id: 'MAC-HR-02', vulnerability_count: 3 },
+
+  osDistribution: [
+    { name: 'Windows 11', value: 640, fill: '#3b82f6' },
+    { name: 'Windows 10', value: 420, fill: '#60a5fa' },
+    { name: 'macOS Sonoma', value: 120, fill: '#a78bfa' },
+    { name: 'Ubuntu 22.04', value: 50, fill: '#f97316' },
+    { name: 'Other Linux', value: 20, fill: '#10b981' }
   ],
-  policyViolators: [
-    { employee_name: 'john.doe', violation_count: 12 },
-    { employee_name: 'sarah.smith', violation_count: 7 },
+
+  alertTypes: [
+    { name: 'Malware Detection', value: 3, fill: '#ef4444' },
+    { name: 'Firewall Policy Violation', value: 8, fill: '#f97316' },
+    { name: 'Unauthorized USB Device', value: 6, fill: '#eab308' },
+    { name: 'Privilege Escalation Attempt', value: 4, fill: '#dc2626' },
+    { name: 'Suspicious Network Activity', value: 9, fill: '#fb923c' }
   ],
+
   wazuhEvents: [
-    { id: 1, timestamp: new Date().toISOString(), workstation_id: 'WKST-2088', employee_name: 'john.doe', description: 'Cryptominer.exe detected', severity: 'Critical', full_log: { process: 'cryptominer.exe' } },
-    { id: 2, timestamp: new Date().toISOString(), workstation_id: 'LAPTOP-DEV-04', employee_name: 'dev.user01', description: 'Firewall policy bypassed', severity: 'High', full_log: { rule: 'allow_all' } },
+    {
+      id: 'evt-001',
+      timestamp: new Date().toISOString(),
+      workstationId: 'WKST-2088',
+      employee: 'john.doe',
+      alert: 'Cryptominer.exe detected running in background',
+      severity: 'Critical',
+      process: 'cryptominer.exe',
+      file_path: 'C:\\Users\\john\\AppData\\Roaming\\cryptominer.exe',
+      action_taken: 'Process quarantined'
+    },
+    {
+      id: 'evt-002',
+      timestamp: new Date().toISOString(),
+      workstationId: 'LAPTOP-DEV-04',
+      employee: 'dev.user01',
+      alert: 'Firewall policy bypass attempt detected',
+      severity: 'High',
+      rule: 'allow_all',
+      source_ip: '192.168.12.14'
+    },
+    {
+      id: 'evt-003',
+      timestamp: new Date().toISOString(),
+      workstationId: 'MAC-HR-02',
+      employee: 'sarah.smith',
+      alert: 'Unauthorized USB storage device connected',
+      severity: 'Medium',
+      device_vendor: 'SanDisk',
+      device_type: 'USB Storage'
+    },
+    {
+      id: 'evt-004',
+      timestamp: new Date().toISOString(),
+      workstationId: 'WKST-1102',
+      employee: 'finance.user',
+      alert: 'Multiple failed privilege escalation attempts',
+      severity: 'High',
+      process: 'sudo',
+      attempts: 5
+    },
+    {
+      id: 'evt-005',
+      timestamp: new Date().toISOString(),
+      workstationId: 'LAPTOP-SALES-09',
+      employee: 'sales.exec',
+      alert: 'Suspicious outbound traffic detected',
+      severity: 'Medium',
+      destination_ip: '45.76.122.19',
+      port: 4444
+    }
   ]
 };
 
@@ -126,18 +190,132 @@ export const mockCaseManagementData = {
 
 // --- NEW MOCK DATA ---
 export const mockUsersData = [
-  { id: 1, name: 'Sarah Smith', email: 'sarah@atlas.local', role: 'Security Admin', status: 'Active', avatar: '' },
-  { id: 2, name: 'John Doe', email: 'john@atlas.local', role: 'SOC Analyst', status: 'Active', avatar: '' },
-  { id: 3, name: 'Dev Ops', email: 'dev@atlas.local', role: 'Viewer', status: 'Pending', avatar: '' },
+  {
+    id: 1,
+    name: 'Sarah Smith',
+    email: 'sarah@atlas.local',
+    role: 'Admin',
+    is_active: true,
+    invite_pending: false
+  },
+  {
+    id: 2,
+    name: 'John Doe',
+    email: 'john@atlas.local',
+    role: 'Analyst',
+    is_active: true,
+    invite_pending: false
+  },
+  {
+    id: 3,
+    name: 'Dev Ops',
+    email: 'dev@atlas.local',
+    role: 'Read-Only',
+    is_active: false,
+    invite_pending: true
+  },
+  {
+    id: 4,
+    name: 'Emily Carter',
+    email: 'emily@atlas.local',
+    role: 'Analyst',
+    is_active: true,
+    invite_pending: false
+  },
+  {
+    id: 5,
+    name: 'Michael Chen',
+    email: 'michael@atlas.local',
+    role: 'Read-Only',
+    is_active: true,
+    invite_pending: false
+  }
 ];
 
 export const mockReportsData = {
   scheduledReports: [
-    { id: 1, title: 'Weekly Executive Threat Briefing', description: 'High-level security overview', schedule: 'Weekly (Monday)', active: true, configureLabel: 'Configure' },
-    { id: 2, API: 'API Consumption & Cost', description: 'Detailed breakdown of API metrics', schedule: 'Monthly', active: false, configureLabel: 'Configure' }
+    {
+      id: 1,
+      title: "Weekly Executive Threat Briefing",
+      description: "High-level overview of critical security events and trends",
+      schedule: "Weekly (Monday 08:00)",
+      active: true,
+      configureLabel: "Configure"
+    },
+    {
+      id: 2,
+      title: "API Consumption & Cost Analysis",
+      description: "Detailed report on API usage, requests, and cost breakdown",
+      schedule: "Monthly (1st day)",
+      active: true,
+      configureLabel: "Configure"
+    },
+    {
+      id: 3,
+      title: "Endpoint Security Compliance",
+      description: "Endpoint compliance status including patch levels and policy violations",
+      schedule: "Weekly (Friday 18:00)",
+      active: true,
+      configureLabel: "Configure"
+    },
+    {
+      id: 4,
+      title: "Network Anomaly Summary",
+      description: "Summary of unusual network traffic and threat intelligence matches",
+      schedule: "Daily (02:00)",
+      active: false,
+      configureLabel: "Configure"
+    },
+    {
+      id: 5,
+      title: "User Risk Activity Report",
+      description: "Identifies high-risk users based on anomalous behavior",
+      schedule: "Weekly (Wednesday)",
+      active: false,
+      configureLabel: "Configure"
+    }
   ],
+
   recentDownloads: [
-    { id: 1, fileName: 'Auth-Svc_Audit.pdf', targetAppScope: 'Auth-Svc', generated: 'Today', size: '2.4 MB', downloadUrl: '#' },
-    { id: 2, fileName: 'Network_Anomalies.csv', targetAppScope: 'Global', generated: 'Yesterday', size: '1.8 MB', downloadUrl: '#' }
+    {
+      id: 1,
+      fileName: "Auth-Service_Security_Audit.pdf",
+      targetAppScope: "Auth-Service",
+      generated: "Today",
+      size: "2.4 MB",
+      downloadUrl: "/mock-downloads/auth-service-audit.pdf"
+    },
+    {
+      id: 2,
+      fileName: "Network_Anomalies_Report.csv",
+      targetAppScope: "Global",
+      generated: "Yesterday",
+      size: "1.8 MB",
+      downloadUrl: "/mock-downloads/network-anomalies.csv"
+    },
+    {
+      id: 3,
+      fileName: "Endpoint_Compliance_Status.pdf",
+      targetAppScope: "Endpoint Fleet",
+      generated: "2 days ago",
+      size: "3.2 MB",
+      downloadUrl: "/mock-downloads/endpoint-compliance.pdf"
+    },
+    {
+      id: 4,
+      fileName: "API_Usage_Cost_Report.csv",
+      targetAppScope: "API Gateway",
+      generated: "3 days ago",
+      size: "950 KB",
+      downloadUrl: "/mock-downloads/api-usage.csv"
+    },
+    {
+      id: 5,
+      fileName: "User_Risk_Activity_Summary.pdf",
+      targetAppScope: "Identity Platform",
+      generated: "Last week",
+      size: "1.5 MB",
+      downloadUrl: "/mock-downloads/user-risk.pdf"
+    }
   ]
 };

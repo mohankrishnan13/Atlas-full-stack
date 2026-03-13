@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  mockHeaderData,
   mockOverviewData,
   mockApiMonitoringData,
   mockNetworkTrafficData,
@@ -64,14 +65,20 @@ export async function apiGet<T>(endpoint: string): Promise<T> {
   if (endpoint.includes('/case-management') || endpoint.includes('/incidents')) {
     return Promise.resolve(mockCaseManagementData as T);
   }
-  // FIX: Settings User load
-  if (endpoint.includes('/auth/users') || endpoint.includes('/users') || endpoint.includes('/team')) {
-    return Promise.resolve(mockUsersData as T);
-  }
-  // FIX: Reports load
-  if (endpoint.includes('/reports')) {
-    return Promise.resolve(mockReportsData as T);
-  }
+  // Settings User load
+if (endpoint.includes('/auth/users') || endpoint.includes('/users') || endpoint.includes('/team')) {
+  return Promise.resolve(mockUsersData as T);
+}
+
+// Header Data (Applications list)
+if (endpoint.includes('/header-data')) {
+  return Promise.resolve(mockHeaderData as T);
+}
+
+// Reports load
+if (endpoint.includes('/reports/overview')) {
+  return Promise.resolve(mockReportsData as T);
+}
 
   // Fallback for any unhandled endpoint
   console.warn(`[MOCK API GET] No mock data found for endpoint: ${endpoint}`);
