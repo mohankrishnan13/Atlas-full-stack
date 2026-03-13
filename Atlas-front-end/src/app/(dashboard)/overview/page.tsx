@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Sparkles, Shield, Zap, Server, AlertTriangle,
   TrendingUp, CheckCircle, Info, ArrowRight, LoaderCircle
@@ -58,21 +58,6 @@ function AppHealthCard({ appName, load, status, onAction }: { appName: string; l
   );
 }
 
-function LoadingSkeleton() {
-  return (
-    <div className="space-y-6 animate-pulse">
-      <div className="h-24 bg-slate-800 rounded-xl" />
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-        {[...Array(3)].map((_, i) => <div key={i} className="h-44 bg-slate-800 rounded-xl" />)}
-      </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div className="h-72 bg-slate-800 rounded-xl" />
-        <div className="h-72 bg-slate-800 rounded-xl" />
-      </div>
-    </div>
-  );
-}
-
 export default function OverviewPage() {
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -98,13 +83,17 @@ export default function OverviewPage() {
   if (loading) return <div className="p-6"><LoaderCircle className="w-6 h-6 animate-spin text-slate-500" /></div>;
   if (!data) return <div className="flex items-center justify-center h-48 text-slate-500">No backend telemetry data available.</div>;
 
-  // FIX: Ensure data values are parsed as numbers to prevent charting glitches
-  const formattedApiRequests = data.apiRequestsByApp.map(item => ({
+  // --- Safe Data Parsing & Coercion ---
+  const safeMicroservices = Array.isArray(data.microservices) ? data.microservices : [];
+  const safeApiRequests = Array.isArray(data.apiRequestsByApp) ? data.apiRequestsByApp : [];
+  const safeAppAnomalies = Array.isArray(data.appAnomalies) ? data.appAnomalies : [];
+
+  const formattedApiRequests = safeApiRequests.map(item => ({
     ...item,
     requests: Number(item.requests) || 0
   }));
 
-  const riskData = data.appAnomalies
+  const riskData = safeAppAnomalies
     .map(a => ({ ...a, anomalies: Number(a.anomalies) || 0 }))
     .filter(a => a.anomalies > 0)
     .sort((a, b) => b.anomalies - a.anomalies)
@@ -116,69 +105,70 @@ export default function OverviewPage() {
           <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2"><Shield className="w-5 h-5 text-blue-400" />Security Overview</h1>
           <p className="text-xs text-slate-500 mt-0.5 ml-7">Cross-application security posture from live application_telemetry schema.</p>
       </header>
-      <div className="bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-slate-800 rounded-xl px-6 py-5"><div className="flex items-start gap-3"><div className="w-9 h-9 bg-indigo-500/15 rounded-lg flex items-center justify-center flex-shrink-0 border border-indigo-500/25"><Sparkles className="w-4 h-4 text-indigo-300" /></div><div className="flex-1"><div className="flex items-center gap-2 flex-wrap"><div className="text-sm font-semibold text-slate-100">ATLAS AI Daily Threat Briefing</div><InfoTooltip text="AI-generated daily summary of critical security events and recommended actions." /></div><p className="text-xs text-slate-300 mt-2 leading-relaxed">{data.aiBriefing}</p></div></div></div>
+      <div className="bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-slate-800 rounded-xl px-6 py-5"><div className="flex items-start gap-3"><div className="w-9 h-9 bg-indigo-500/15 rounded-lg flex items-center justify-center flex-shrink-0 border border-indigo-500/25"><Sparkles className="w-4 h-4 text-indigo-300" /></div><div className="flex-1"><div className="flex items-center gap-2 flex-wrap"><div className="text-sm font-semibold text-slate-100">ATLAS AI Daily Threat Briefing</div><InfoTooltip text="AI-generated daily summary of critical security events and recommended actions." /></div><p className="text-xs text-slate-300 mt-2 leading-relaxed">{data.aiBriefing || 'No briefing available.'}</p></div></div></div>
 
       <div>
-        <SectionHeader icon={<Server className="w-4 h-4 text-slate-300" />} title="Application Health Matrix" subtitle={`Live status for ${data.microservices.length} monitored applications.`} tooltipText="Each card represents a monitored application's health, sourced from the microservice_status schema." />
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {data.microservices.map(svc => {
-            const reqData = data.apiRequestsByApp.find(a => a.app.toLowerCase().includes(svc.name.toLowerCase().split('-')[0]));
-            
-            // FIX: Added fallbacks to prevent the `toLocaleString` undefined error
-            const rpm = Number(reqData?.requests) || (svc?.connections?.length || 0) * 150;
-            
-            return (
-              <AppHealthCard 
-                key={svc.id} 
-                appName={svc.name} 
-                load={`${(rpm || 0).toLocaleString()} req/m`} 
-                status={svc.status} 
-                onAction={() => handleMitigate(svc.name)} 
-              />
-            );
-          })}
-        </div>
+        <SectionHeader icon={<Server className="w-4 h-4 text-slate-300" />} title="Application Health Matrix" subtitle={`Live status for ${safeMicroservices.length} monitored applications.`} tooltipText="Each card represents a monitored application's health, sourced from the microservice_status schema." />
+        {safeMicroservices.length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {safeMicroservices.map(svc => {
+              const reqData = formattedApiRequests.find(a => a.app.toLowerCase().includes(svc.name.toLowerCase().split('-')[0]));
+              const rpm = Number(reqData?.requests) || 0;
+              
+              return (
+                <AppHealthCard 
+                  key={svc.id} 
+                  appName={svc.name}
+                  load={`${rpm.toLocaleString()} req/m`}
+                  status={svc.status} 
+                  onAction={() => handleMitigate(svc.name)} 
+                />
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-center py-10 text-slate-500 text-sm bg-slate-900 border border-slate-800 rounded-xl">No monitored microservices found.</div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
           <SectionHeader icon={<TrendingUp className="w-4 h-4 text-blue-400" />} title="API Consumption by Application" subtitle="Total API requests per minute for each application" tooltipText="Data fetched from the telemetry-service API, mapped to the ApiRequestsByApp schema." />
-          <ResponsiveContainer width="100%" height={280}> 
-            <BarChart data={formattedApiRequests} margin={{ top: 5, right: 20, left: 10, bottom: 20 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-              <XAxis dataKey="app" stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#334155' }} >
-                 <Label value="Application Name" position="bottom" offset={15} className="fill-slate-500 text-xs"/>
-              </XAxis>
-              <YAxis stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#334155' }}>
-                 <Label value="Total Requests" angle={-90} position="left" offset={-5} className="fill-slate-500 text-xs"/>
-              </YAxis>
-              <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }} cursor={{ fill: '#1e293b' }} />
-              {/* FIX: Moved fill color directly to the Bar component instead of using a single Cell */}
-              <Bar dataKey="requests" name="Requests" radius={[4, 4, 0, 0]} fill="#3b82f6" />
-            </BarChart>
-          </ResponsiveContainer>
+          {formattedApiRequests.length > 0 ? (
+            <ResponsiveContainer width="100%" height={280}> 
+              <BarChart data={formattedApiRequests} margin={{ top: 5, right: 20, left: 10, bottom: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                <XAxis dataKey="app" stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#334155' }} >
+                  <Label value="Application Name" position="bottom" offset={15} className="fill-slate-500 text-xs"/>
+                </XAxis>
+                <YAxis stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#334155' }}>
+                  <Label value="Total Requests" angle={-90} position="left" offset={-5} className="fill-slate-500 text-xs"/>
+                </YAxis>
+                <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }} cursor={{ fill: '#1e293b' }} />
+                <Bar dataKey="requests" name="Requests" radius={[4, 4, 0, 0]} fill="#3b82f6" />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex items-center justify-center h-[280px] text-slate-500"><CheckCircle className="w-4 h-4 text-emerald-500 mr-2" />No API request data available.</div>
+          )}
         </div>
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
           <SectionHeader icon={<AlertTriangle className="w-4 h-4 text-red-400" />} title="Top Risk Applications by Cumulative Anomaly Score" subtitle="Applications ranked by their cumulative anomaly score" tooltipText="Higher scores indicate more suspicious behavior. Scores above 80 warrant investigation." />
           {riskData.length > 0 ? (
             <ResponsiveContainer width="100%" height={280}>
-              {/* FIX: Increased left margin to 80 to prevent labels from being cut off */}
-              <BarChart data={riskData} layout="vertical" margin={{ top: 5, right: 20, left: 80, bottom: 20 }}>
+              <BarChart data={riskData} layout="vertical" margin={{ top: 5, right: 20, left: 100, bottom: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
                 <XAxis type="number" stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#334155' }}>
                   <Label value="Cumulative Anomaly Score" position="bottom" offset={15} className="fill-slate-500 text-xs"/>
                 </XAxis>
-                {/* FIX: Increased YAxis width to 130 and adjusted label offset */}
-                <YAxis dataKey="name" type="category" width={130} stroke="#475569" tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false} axisLine={false} >
-                  <Label value="Application Name" angle={-90} position="left" offset={-60} className="fill-slate-500 text-xs"/>
-                </YAxis>
+                <YAxis dataKey="name" type="category" width={120} stroke="#475569" tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false} axisLine={false} interval={0} />
                 <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155'}} cursor={{ fill: '#1e293b' }} />
                 <Bar dataKey="anomalies" name="Anomaly Score" radius={[0, 4, 4, 0]}>
-                  {riskData.map((_, idx) => <Cell key={idx} fill={idx === 0 ? '#ef4444' : idx === 1 ? '#f97316' : '#eab308'} />)}
+                  {riskData.map((entry, idx) => <Cell key={`cell-${idx}`} fill={entry.anomalies > 80 ? '#ef4444' : entry.anomalies > 50 ? '#f97316' : '#eab308'} />)}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
-          ) : <div className="flex items-center justify-center h-full text-slate-500"><CheckCircle className="w-4 h-4 text-emerald-500 mr-2" />No anomalies detected from telemetry streams.</div>}
+          ) : <div className="flex items-center justify-center h-[280px] text-slate-500"><CheckCircle className="w-4 h-4 text-emerald-500 mr-2" />No anomalies detected from telemetry streams.</div>}
         </div>
       </div>
     </div>

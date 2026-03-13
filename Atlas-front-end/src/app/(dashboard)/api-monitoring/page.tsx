@@ -73,22 +73,26 @@ export default function ApiMonitoringPage() {
   if (loading) return <div className="p-6"><LoaderCircle className="w-6 h-6 animate-spin text-slate-500" /></div>;
   if (!data) return <div className="flex items-center justify-center h-48 text-slate-500">No API monitoring data available from backend.</div>;
   
-  // Safe Variable Parsing
+  // --- Safe Data Parsing & Coercion ---
   const safeTotalCalls = Number(data.totalApiCalls) || 0;
   const safeBlocked = Number(data.blockedThreats) || 0;
-  
-  const formattedApiOveruse = data.apiOveruse.map(item => ({
+  const safeGlobalAvailability = Number(data.globalAvailability) || 0;
+  const safeActiveIncidents = Number(data.activeIncidents) || 0;
+
+  // Safeguard array mapping and coerce chart data to numbers
+  const formattedApiOveruse = (data.apiOveruse || []).map(item => ({
     ...item,
     limitRpm: Number(item.limitRpm) || 0,
     currentRpm: Number(item.currentRpm) || 0
   }));
   
-  const formattedAbusedEndpoints = data.mostAbusedEndpoints.map(item => ({
+  const formattedAbusedEndpoints = (data.mostAbusedEndpoints || []).map(item => ({
     ...item,
     violations: Number(item.violations) || 0
   }));
 
-  const { globalAvailability, activeIncidents, topConsumers, activeMitigations } = data;
+  const safeTopConsumers = Array.isArray(data.topConsumers) ? data.topConsumers : [];
+  const safeActiveMitigations = Array.isArray(data.activeMitigations) ? data.activeMitigations : [];
 
   return (
     <div className="space-y-6 pb-8">
@@ -100,48 +104,54 @@ export default function ApiMonitoringPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard value={safeTotalCalls.toLocaleString()} label="Total API Calls" subtitle="Cumulative requests today" tooltipText="Total API requests processed across all monitored applications since midnight UTC, sourced from api_logs." icon={Activity} />
         <StatCard value={safeBlocked.toLocaleString()} label="Blocked Threats" subtitle="Malicious requests blocked" tooltipText="Requests blocked by WAF rules for suspicious payloads or flagged IPs, based on the security_events schema." color="red" icon={Ban} />
-        <StatCard value={`${globalAvailability}%`} label="Global API Availability" subtitle="Successful response rate" tooltipText="Percentage of successful (2xx/3xx) API requests. Below 99% suggests a systemic issue." color="green" icon={TrendingUp} />
-        <StatCard value={activeIncidents} label="Active Incidents" subtitle="Security events requiring attention" tooltipText="Open security incidents escalated from anomaly detection that require human review or mitigation." color="orange" icon={ShieldAlert} />
+        <StatCard value={`${safeGlobalAvailability}%`} label="Global API Availability" subtitle="Successful response rate" tooltipText="Percentage of successful (2xx/3xx) API requests. Below 99% suggests a systemic issue." color="green" icon={TrendingUp} />
+        <StatCard value={safeActiveIncidents} label="Active Incidents" subtitle="Security events requiring attention" tooltipText="Open security incidents escalated from anomaly detection that require human review or mitigation." color="orange" icon={ShieldAlert} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="bg-slate-900 border border-slate-800 rounded-xl">
           <SectionHeader icon={<Server className="w-4 h-4 text-blue-400" />} title="API Overuse by Application" subtitle="Request rate vs. configured rate limit" tooltipText="Shows current requests per minute (RPM) vs. the hard-coded rate limit for each application." />
           <div className="px-5 pb-5">
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={formattedApiOveruse} margin={{ top: 20, right: 20, left: 0, bottom: 20 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                <XAxis dataKey="application_name" stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#334155' }} >
-                  <Label value="Application Name" position="bottom" offset={15} className="fill-slate-500 text-xs"/>
-                </XAxis>
-                <YAxis stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#334155' }} >
-                   <Label value="Requests per Minute" angle={-90} position="left" offset={-5} className="fill-slate-500 text-xs"/>
-                </YAxis>
-                <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }} cursor={{ fill: '#1e293b' }} />
-                <Legend wrapperStyle={{ paddingTop: '12px', fontSize: '11px' }} />
-                <Bar dataKey="limitRpm" name="Rate Limit (RPM)" fill="#334155" radius={[4, 4, 0, 0]} barSize={22} />
-                <Bar dataKey="currentRpm" name="Current RPM" radius={[4, 4, 0, 0]} barSize={22}>{formattedApiOveruse.map((e, i) => <Cell key={i} fill={e.currentRpm > e.limitRpm ? '#ef4444' : '#3b82f6'} />)}</Bar>
-              </BarChart>
-            </ResponsiveContainer>
+           {formattedApiOveruse.length > 0 ? (
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={formattedApiOveruse} margin={{ top: 20, right: 20, left: 0, bottom: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                  <XAxis dataKey="application_name" stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#334155' }} >
+                    <Label value="Application Name" position="bottom" offset={15} className="fill-slate-500 text-xs"/>
+                  </XAxis>
+                  <YAxis stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#334155' }} >
+                    <Label value="Requests per Minute" angle={-90} position="left" offset={-5} className="fill-slate-500 text-xs"/>
+                  </YAxis>
+                  <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }} cursor={{ fill: '#1e293b' }} />
+                  <Legend wrapperStyle={{ paddingTop: '12px', fontSize: '11px' }} />
+                  <Bar dataKey="limitRpm" name="Rate Limit (RPM)" fill="#334155" radius={[4, 4, 0, 0]} barSize={22} />
+                  <Bar dataKey="currentRpm" name="Current RPM" radius={[4, 4, 0, 0]} barSize={22}>{formattedApiOveruse.map((e, i) => <Cell key={i} fill={e.currentRpm > e.limitRpm ? '#ef4444' : '#3b82f6'} />)}</Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-[300px] text-slate-500 text-sm">No API overuse data available.</div>
+            )}
           </div>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl">
           <SectionHeader icon={<ShieldAlert className="w-4 h-4 text-red-400" />} title="Most Abused API Endpoints" subtitle="API routes with the most suspicious requests" tooltipText="Ranks API endpoints by detected abuse attempts based on security event logs." />
           <div className="px-5 pb-5">
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={formattedAbusedEndpoints} layout="vertical" margin={{ top: 5, right: 30, left: 30, bottom: 20 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
-                <XAxis type="number" stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#334155' }} >
-                  <Label value="Violation Count" position="bottom" offset={15} className="fill-slate-500 text-xs"/>
-                </XAxis>
-                <YAxis dataKey="endpoint" type="category" width={150} stroke="#475569" tick={{ fill: '#cbd5e1', fontSize: 10 }} tickLine={false} axisLine={false} >
-                  <Label value="Endpoint Path" angle={-90} position="left" offset={-20} className="fill-slate-500 text-xs"/>
-                </YAxis>
-                <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }} cursor={{ fill: '#1e293b' }} />
-                <Bar dataKey="violations" name="Abuse Violations" radius={[0, 4, 4, 0]} barSize={22}>{formattedAbusedEndpoints.map((e: MostAbusedEndpoints, i: number) => <Cell key={i} fill={e.severity === 'critical' ? '#ef4444' : e.severity === 'high' ? '#f97316' : '#eab308'} />)}</Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            {formattedAbusedEndpoints.length > 0 ? (
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={formattedAbusedEndpoints} layout="vertical" margin={{ top: 5, right: 30, left: 120, bottom: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
+                  <XAxis type="number" stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#334155' }} >
+                    <Label value="Violation Count" position="bottom" offset={15} className="fill-slate-500 text-xs"/>
+                  </XAxis>
+                  <YAxis dataKey="endpoint" type="category" width={150} stroke="#475569" tick={{ fill: '#cbd5e1', fontSize: 10 }} tickLine={false} axisLine={false} interval={0} />
+                  <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }} cursor={{ fill: '#1e293b' }} />
+                  <Bar dataKey="violations" name="Abuse Violations" radius={[0, 4, 4, 0]} barSize={16}>{formattedAbusedEndpoints.map((e, i) => <Cell key={i} fill={e.severity === 'critical' ? '#ef4444' : e.severity === 'high' ? '#f97316' : '#eab308'} />)}</Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+               <div className="flex items-center justify-center h-[300px] text-slate-500 text-sm">No abused endpoints detected.</div>
+            )}
           </div>
         </div>
       </div>
@@ -149,12 +159,20 @@ export default function ApiMonitoringPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="bg-slate-900 border border-slate-800 rounded-xl">
           <SectionHeader icon={<Activity className="w-4 h-4 text-purple-400" />} title="Top API Consumers" subtitle="Clients making the most API calls" tooltipText="Lists high-volume API consumers. Red rows indicate quota overuse. Use actions to mitigate." />
-            <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="bg-slate-950 text-slate-500 uppercase text-xs"><th className="px-5 py-3 font-semibold">Consumer (IP)</th><th className="px-5 py-3 font-semibold">Target App</th><th className="px-5 py-3 font-semibold">Total Calls</th><th className="px-5 py-3 font-semibold">Avg Cost</th><th className="px-5 py-3 font-semibold text-right">Action</th></tr></thead><tbody className="divide-y divide-slate-800">{topConsumers.map((row, i) => <tr key={i} className={row.is_overuse ? 'bg-red-950/20' : ''}><td className="px-5 py-3 font-mono text-xs">{row.consumer}</td><td className="px-5 py-3 text-blue-400 text-xs">{row.application_name}</td><td className="px-5 py-3 text-xs">{(Number(row.total_calls) || 0).toLocaleString()}</td><td className={`px-5 py-3 text-xs ${row.is_overuse ? 'text-red-400' : ''}`}>{Number(row.average_cost || 0).toFixed(2)}</td><td className="px-5 py-3 text-right"><button onClick={() => handleBlockRoute(row.application_name, '/*')} className={`text-xs px-3 py-1 rounded border ${row.is_overuse ? 'border-red-500 text-red-400' : 'border-slate-600 text-slate-400'}`}>HARD BLOCK</button></td></tr>)}</tbody></table></div>
+            {safeTopConsumers.length > 0 ? (
+              <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="bg-slate-950 text-slate-500 uppercase text-xs"><th className="px-5 py-3 font-semibold">Consumer (IP)</th><th className="px-5 py-3 font-semibold">Target App</th><th className="px-5 py-3 font-semibold">Total Calls</th><th className="px-5 py-3 font-semibold">Avg Cost</th><th className="px-5 py-3 font-semibold text-right">Action</th></tr></thead><tbody className="divide-y divide-slate-800">{safeTopConsumers.map((row, i) => <tr key={i} className={row.is_overuse ? 'bg-red-950/20' : ''}><td className="px-5 py-3 font-mono text-xs">{row.consumer}</td><td className="px-5 py-3 text-blue-400 text-xs">{row.application_name}</td><td className="px-5 py-3 text-xs">{(Number(row.total_calls) || 0).toLocaleString()}</td><td className={`px-5 py-3 text-xs ${row.is_overuse ? 'text-red-400' : ''}`}>{Number(row.average_cost || 0).toFixed(2)}</td><td className="px-5 py-3 text-right"><button onClick={() => handleBlockRoute(row.application_name, '/*')} className={`text-xs px-3 py-1 rounded border ${row.is_overuse ? 'border-red-500 text-red-400' : 'border-slate-600 text-slate-400'}`}>HARD BLOCK</button></td></tr>)}</tbody></table></div>
+            ) : (
+                <div className="text-center py-10 text-slate-500 text-sm">No high-volume API consumers found.</div>
+            )}
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl">
           <SectionHeader icon={<Lock className="w-4 h-4 text-emerald-400" />} title="Active Mitigation Feed" subtitle="Live feed of ongoing security mitigations" tooltipText="Shows active mitigations like blocks or rate limits sourced from the incidents schema. Actions can be reversed in Incident Management." />
-            <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="bg-slate-950 text-slate-500 uppercase text-xs"><th className="px-5 py-3 font-semibold">Target & Offender</th><th className="px-5 py-3 font-semibold">Violation Type</th><th className="px-5 py-3 font-semibold text-right">Action</th></tr></thead><tbody className="divide-y divide-slate-800">{activeMitigations.map((row, i) => <tr key={i}><td className="px-5 py-4"><div className="font-semibold text-blue-400">{row.target}</div><div className="text-xs text-slate-500 font-mono">External IP (Public): {row.offender}</div></td><td className="px-5 py-4"><div className="font-semibold">{row.violation_type}</div><div className="text-xs text-slate-500">{row.details}</div></td><td className="px-5 py-4 text-right"><button className={`text-xs font-semibold px-3 py-1.5 rounded ${row.action === 'BLOCK' ? 'bg-red-600 text-white' : 'bg-blue-600 text-white'}`}>{row.action}</button></td></tr>)}</tbody></table></div>
+            {safeActiveMitigations.length > 0 ? (
+              <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="bg-slate-950 text-slate-500 uppercase text-xs"><th className="px-5 py-3 font-semibold">Target & Offender</th><th className="px-5 py-3 font-semibold">Violation Type</th><th className="px-5 py-3 font-semibold text-right">Action</th></tr></thead><tbody className="divide-y divide-slate-800">{safeActiveMitigations.map((row, i) => <tr key={i}><td className="px-5 py-4"><div className="font-semibold text-blue-400">{row.target}</div><div className="text-xs text-slate-500 font-mono">External IP (Public): {row.offender}</div></td><td className="px-5 py-4"><div className="font-semibold">{row.violation_type}</div><div className="text-xs text-slate-500">{row.details}</div></td><td className="px-5 py-4 text-right"><button className={`text-xs font-semibold px-3 py-1.5 rounded ${row.action === 'BLOCK' ? 'bg-red-600 text-white' : 'bg-blue-600 text-white'}`}>{row.action}</button></td></tr>)}</tbody></table></div>
+            ) : (
+              <div className="text-center py-10 text-slate-500 text-sm">No active mitigations in place.</div>
+            )}
         </div>
       </div>
     </div>
