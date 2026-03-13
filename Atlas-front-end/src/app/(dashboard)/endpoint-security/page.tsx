@@ -1,159 +1,412 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
-  Shield, AlertTriangle, Lock, Ban, UserX,
-  Activity, ShieldAlert, Laptop, Info, TrendingUp,
-  ChevronDown, ChevronUp, LoaderCircle
+  Shield,
+  AlertTriangle,
+  Ban,
+  Activity,
+  Laptop,
+  Info,
+  LoaderCircle,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip,
-  ResponsiveContainer, Cell, CartesianGrid, Label
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip as RechartsTooltip,
+  ResponsiveContainer,
+  Cell,
+  CartesianGrid,
+  Label
 } from 'recharts';
 import { apiGet, apiPost, ApiError } from '@/lib/api';
 import { useEnvironment } from '@/context/EnvironmentContext';
 import { toast } from 'sonner';
-import type { EndpointSecurityData, WazuhEvent, PolicyViolator } from '@/lib/types';
+import type { EndpointSecurityData, WazuhEvent } from '@/lib/types';
 
-// --- Reusable Components ---
-function InfoTooltip({ text }: { text: string }) {
+const InfoTooltip = React.memo(({ text }: { text: string }) => {
   const [open, setOpen] = useState(false);
+
   return (
     <div className="relative inline-flex items-center">
-      <button onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} className="text-slate-500 hover:text-blue-400 transition-colors" aria-label="More information"><Info className="w-4 h-4" /></button>
-      {open && <div className="absolute z-50 left-6 top-0 w-72 bg-slate-800 border border-slate-600 rounded-lg p-3 shadow-xl text-xs text-slate-300 leading-relaxed">{text}</div>}
+      <button
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        className="text-slate-500 hover:text-blue-400 transition-colors"
+        aria-label="More information"
+      >
+        <Info className="w-4 h-4" />
+      </button>
+
+      {open && (
+        <div className="absolute z-50 left-6 top-0 w-72 bg-slate-800 border border-slate-600 rounded-lg p-3 shadow-xl text-xs text-slate-300 leading-relaxed">
+          {text}
+        </div>
+      )}
     </div>
   );
-}
+});
 
-function SectionHeader({ icon, title, subtitle, tooltipText }: { icon: React.ReactNode; title: string; subtitle: string; tooltipText: string; }) {
-  return (
+InfoTooltip.displayName = 'InfoTooltip';
+
+const SectionHeader = React.memo(
+  ({ icon, title, subtitle, tooltipText }: any) => (
     <div className="mb-5 px-5 pt-5">
-      <div className="flex items-center gap-2 mb-1">{icon}<h2 className="text-base font-semibold text-slate-100">{title}</h2><InfoTooltip text={tooltipText} /></div>
+      <div className="flex items-center gap-2 mb-1">
+        {icon}
+        <h2 className="text-base font-semibold text-slate-100">{title}</h2>
+        <InfoTooltip text={tooltipText} />
+      </div>
       <p className="text-xs text-slate-500 leading-relaxed pl-7">{subtitle}</p>
     </div>
+  )
+);
+
+SectionHeader.displayName = 'SectionHeader';
+
+const SeverityBadge = ({ severity }: { severity: string }) => {
+  const map: Record<string, string> = {
+    Critical: 'text-red-400 bg-red-500/10 border-red-500/40',
+    High: 'text-orange-400 bg-orange-500/10 border-orange-500/40',
+    Medium: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/40',
+    Low: 'text-blue-400 bg-blue-500/10 border-blue-500/40'
+  };
+
+  return (
+    <span
+      className={`text-xs px-2 py-0.5 rounded border font-semibold whitespace-nowrap ${
+        map[severity] ?? 'text-slate-400 border-slate-600'
+      }`}
+    >
+      {severity}
+    </span>
   );
-}
+};
 
-function SeverityBadge({ severity }: { severity: 'Critical' | 'High' | 'Medium' | 'Low' | string }) {
-  const map: Record<string, string> = { Critical: 'text-red-400 bg-red-500/10 border-red-500/40', High: 'text-orange-400 bg-orange-500/10 border-orange-500/40', Medium: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/40', Low: 'text-blue-400 bg-blue-500/10 border-blue-500/40' };
-  return <span className={`text-xs px-2 py-0.5 rounded border font-semibold whitespace-nowrap ${map[severity] ?? 'text-slate-400 border-slate-600'}`}>{severity}</span>;
-}
+const truncateLabel = (label: string, maxLength = 10) => {
+  if (typeof label !== 'string') return '';
+  return label.length > maxLength ? `${label.substring(0, maxLength)}...` : label;
+};
 
-function EventRow({ ev, onQuarantine }: { ev: WazuhEvent; onQuarantine: (id: string, employee: string) => void }) {
+const CustomTooltipContent = ({ active, payload }: any) => {
+  if (active && payload && payload.length) {
+    const name = payload[0].payload?.name;
+
+    return (
+      <div className="bg-slate-800 border border-slate-600 rounded-lg p-3 text-xs shadow-xl">
+        <p className="font-bold text-slate-200 truncate">{name}</p>
+        <p style={{ color: payload[0].fill }}>
+          {payload[0].name}: {Number(payload[0].value || 0).toLocaleString()}
+        </p>
+      </div>
+    );
+  }
+  return null;
+};
+
+const EventRow = ({
+  ev,
+  onQuarantine
+}: {
+  ev: WazuhEvent;
+  onQuarantine: (id: string, employee: string) => void;
+}) => {
   const [expanded, setExpanded] = useState(false);
+
+  const toggle = () => setExpanded((p) => !p);
+
   return (
     <>
-      <tr className={`hover:bg-slate-800/40 transition-colors cursor-pointer border-b border-slate-800 ${ev.severity === 'Critical' ? 'bg-red-950/20' : ''}`} onClick={() => setExpanded(!expanded)}>
-        <td className="px-5 py-4 whitespace-nowrap"><span className="text-slate-400 font-mono text-xs">{new Date(ev.timestamp).toLocaleTimeString()}</span></td>
-        <td className="px-5 py-4"><div className="font-mono text-sm">{ev.workstation_id}</div><div className="text-xs text-slate-400">{ev.employee_name}</div></td>
-        <td className="px-5 py-4"><div className="flex items-start gap-2"><AlertTriangle className={`w-4 h-4 ${ev.severity === 'Critical' ? 'text-red-500' : 'text-orange-500'} mt-0.5 flex-shrink-0`} /><span className={`text-sm ${ev.severity === 'Critical' ? 'text-red-300' : 'text-slate-300'}`}>{ev.description}</span></div></td>
-        <td className="px-5 py-4"><SeverityBadge severity={ev.severity} /></td>
-        <td className="px-5 py-4 text-right"><div className="flex justify-end items-center gap-2"><button onClick={(e) => { e.stopPropagation(); onQuarantine(ev.workstation_id, ev.employee_name); }} className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-3 py-1.5 rounded flex items-center gap-1.5"><Ban className="w-3 h-3" />QUARANTINE</button>{expanded ? <ChevronUp className="w-3 h-3 text-slate-500" /> : <ChevronDown className="w-3 h-3 text-slate-500" />}</div></td>
+      <tr
+        role="button"
+        tabIndex={0}
+        onClick={toggle}
+        onKeyDown={(e) => e.key === 'Enter' && toggle()}
+        className={`hover:bg-slate-800/40 cursor-pointer border-b border-slate-800 ${
+          ev.severity === 'Critical' ? 'bg-red-950/20' : ''
+        }`}
+      >
+        <td className="px-5 py-4 text-xs text-slate-400 font-mono">
+          {ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : 'N/A'}
+        </td>
+
+        <td className="px-5 py-4">
+          <div className="font-mono text-sm">{ev.workstationId}</div>
+          <div className="text-xs text-slate-400">{ev.employee}</div>
+        </td>
+
+        <td className="px-5 py-4">
+          <div className="flex items-start gap-2">
+            <AlertTriangle
+              className={`w-4 h-4 ${
+                ev.severity === 'Critical' ? 'text-red-500' : 'text-orange-500'
+              }`}
+            />
+            <span>{ev.alert}</span>
+          </div>
+        </td>
+
+        <td className="px-5 py-4">
+          <SeverityBadge severity={ev.severity || 'Info'} />
+        </td>
+
+        <td className="px-5 py-4 text-right">
+          <button
+            disabled={ev.severity !== 'Critical'}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (ev.severity === 'Critical')
+                onQuarantine(ev.workstationId || '', ev.employee || '');
+            }}
+            className={`text-white text-xs font-bold px-3 py-1.5 rounded flex items-center gap-1.5 ${
+              ev.severity === 'Critical'
+                ? 'bg-red-600 hover:bg-red-700'
+                : 'bg-slate-700 cursor-not-allowed'
+            }`}
+          >
+            <Ban className="w-3 h-3" /> QUARANTINE
+          </button>
+
+          {expanded ? (
+            <ChevronUp className="w-3 h-3 inline ml-2" />
+          ) : (
+            <ChevronDown className="w-3 h-3 inline ml-2" />
+          )}
+        </td>
       </tr>
-      {expanded && <tr className="bg-slate-950/50 border-b border-slate-800"><td colSpan={5} className="p-4 bg-slate-900"><pre className="text-xs text-slate-400 whitespace-pre-wrap font-mono bg-slate-950 p-2 rounded-md">{JSON.stringify(ev.full_log, null, 2)}</pre></td></tr>}
+
+      {expanded && (
+        <tr className="bg-slate-950 border-b border-slate-800">
+          <td colSpan={5} className="p-4">
+            <pre className="text-xs text-slate-400 whitespace-pre-wrap font-mono bg-slate-950 p-2 rounded-md">
+              {JSON.stringify(ev, null, 2)}
+            </pre>
+          </td>
+        </tr>
+      )}
     </>
   );
-}
+};
 
 export default function EndpointSecurityPage() {
-  const [data, setData] = useState<EndpointSecurityData | null>(null);
-  const [loading, setLoading] = useState(true);
   const { environment } = useEnvironment();
 
+  const [data, setData] = useState<EndpointSecurityData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
+    const controller = new AbortController();
+
     setLoading(true);
-    apiGet<EndpointSecurityData>(`/endpoint-security`).then(setData).catch((err) => toast.error('Failed to load endpoint security data', { description: err.message })).finally(() => setLoading(false));
+    setError(null);
+
+    apiGet<EndpointSecurityData>('/endpoint-security', {
+      signal: controller.signal
+    })
+      .then(setData)
+      .catch((err) => {
+        if (err.name !== 'AbortError') {
+          setError(err.message);
+          toast.error('Failed to load endpoint data', {
+            description: err.message
+          });
+        }
+      })
+      .finally(() => setLoading(false));
+
+    return () => controller.abort();
   }, [environment]);
 
   const handleQuarantine = async (workstation_id: string, employee: string) => {
+    if (!workstation_id) {
+      toast.error('Missing workstation ID');
+      return;
+    }
+
     try {
-      await apiPost('/endpoint-security/quarantine', { workstation_id, employee_name: employee });
-      toast.success('Device Quarantined', { description: `${workstation_id} (${employee}) has been isolated from the network.` });
-    } catch (err) { 
-      toast.error('Failed to Quarantine Device', { description: err instanceof ApiError ? err.message : 'Could not connect to EDR agent.' });
-     }
+      await apiPost('/endpoint-security/quarantine', {
+        workstation_id,
+        employee_name: employee
+      });
+
+      toast.success('Device Quarantined', {
+        description: `${workstation_id} isolated`
+      });
+    } catch (err) {
+      toast.error('Failed to Quarantine', {
+        description:
+          err instanceof ApiError ? err.message : 'Could not connect to EDR'
+      });
+    }
   };
 
-  if (loading) return <div className="p-6"><LoaderCircle className="w-6 h-6 animate-spin text-slate-500" /></div>;
-  if (!data) return <div className="flex items-center justify-center h-48 text-slate-500">No endpoint security data available from backend.</div>;
+  const {
+    safeMonitored,
+    safeOffline,
+    safeMalwareAlerts,
+    osDistribution,
+    alertTypes,
+    safeWazuhEvents
+  } = useMemo(() => {
+    const epData = data || {};
 
-  const { monitoredEndpoints, offlineEndpoints, malwareAlerts, policyViolations, highRiskUsers, vulnerableEndpoints, policyViolators, wazuhEvents } = data;
-  const criticalEvents = wazuhEvents.filter(ev => ev.severity === 'Critical');
+    const osDist = (epData.osDistribution || []).map((d) => ({
+      ...d,
+      name: d.name || 'Unknown',
+      value: Number(d.value) || 0
+    }));
+
+    const alertDist = (epData.alertTypes || []).map((d) => ({
+      ...d,
+      name: d.name || 'Unknown',
+      value: Number(d.value) || 0
+    }));
+
+    return {
+      safeMonitored: Number(epData.monitoredLaptops) || 0,
+      safeOffline: Number(epData.offlineDevices) || 0,
+      safeMalwareAlerts: Number(epData.malwareAlerts) || 0,
+      osDistribution: osDist,
+      alertTypes: alertDist,
+      safeWazuhEvents: epData.wazuhEvents || []
+    };
+  }, [data]);
+
+  if (loading)
+    return (
+      <div className="p-6 flex justify-center">
+        <LoaderCircle className="w-6 h-6 animate-spin text-slate-500" />
+      </div>
+    );
+
+  if (error)
+    return <div className="text-red-400 p-6 text-center">{error}</div>;
+
+  if (!data)
+    return (
+      <div className="flex items-center justify-center h-48 text-slate-500">
+        No endpoint security data available.
+      </div>
+    );
 
   return (
     <div className="space-y-6 pb-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2"><Shield className="w-5 h-5 text-blue-400" />Endpoint Security</h1>
-          <p className="text-xs text-slate-500 mt-0.5 ml-7">Real-time monitoring of managed endpoints, policy compliance, and threats from the EDR agent schema.</p>
-        </div>
-        <div className="flex items-center gap-3 text-xs text-slate-500"><span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-green-400" />{monitoredEndpoints.toLocaleString()} Monitored</span><span className="text-slate-700">|</span><span className="flex items-center gap-1.5 text-orange-400"><span className="w-2 h-2 rounded-full bg-orange-400" />{offlineEndpoints.toLocaleString()} Offline</span></div>
-      </div>
+      <header>
+        <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+          <Shield className="w-5 h-5 text-blue-400" /> Endpoint Security
+        </h1>
+      </header>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-        <div className="bg-slate-900 border border-red-900/50 rounded-xl p-5 flex flex-col justify-between">
-            <div className="flex items-center gap-2 mb-1"><ShieldAlert className="w-4 h-4 text-red-500" /><h2 className="text-base font-semibold text-slate-100">Active Malware Infections</h2></div>
-            <p className="text-xs text-slate-500 leading-relaxed pl-7 mb-3">Devices with confirmed malicious process activity.</p>
-            <div className="text-3xl font-extrabold text-red-400 mb-3">{malwareAlerts} <span className="text-lg font-medium text-slate-400">Devices Compromised</span></div>
-            <button onClick={() => handleQuarantine(criticalEvents[0].workstation_id, criticalEvents[0].employee_name)} disabled={criticalEvents.length === 0} className="w-full py-2 text-sm font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg flex items-center justify-center gap-2 disabled:bg-red-900/50 disabled:cursor-not-allowed"><Ban className="w-4 h-4" />ISOLATE ALL</button>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <h3 className="text-sm text-slate-400">Monitored Laptops</h3>
+          <div className="text-3xl font-bold text-green-400">{safeMonitored}</div>
         </div>
-        <div className="bg-slate-900 border border-orange-900/50 rounded-xl p-5 flex flex-col justify-between">
-            <div className="flex items-center gap-2 mb-1"><Lock className="w-4 h-4 text-orange-500" /><h2 className="text-base font-semibold text-slate-100">Critical Policy Violations</h2></div>
-            <p className="text-xs text-slate-500 leading-relaxed pl-7 mb-3">Devices violating mandatory security policies.</p>
-            <div className="text-3xl font-extrabold text-orange-400 mb-3">{policyViolations} <span className="text-lg font-medium text-slate-400">Non-Compliant Devices</span></div>
-            <button onClick={() => toast.info('Force-enabling endpoint protection for all non-compliant devices…')} className="w-full py-2 text-sm font-bold text-orange-300 border border-orange-500/40 hover:bg-orange-900/20 rounded-lg flex items-center justify-center gap-2"><Shield className="w-4 h-4" />FORCE ENABLE PROTECTION</button>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <h3 className="text-sm text-slate-400">Offline Devices</h3>
+          <div className="text-3xl font-bold text-orange-400">{safeOffline}</div>
         </div>
-        <div className="bg-slate-900 border border-yellow-900/50 rounded-xl p-5 flex flex-col justify-between">
-            <div className="flex items-center gap-2 mb-1"><UserX className="w-4 h-4 text-yellow-500" /><h2 className="text-base font-semibold text-slate-100">High-Risk Users</h2></div>
-            <p className="text-xs text-slate-500 leading-relaxed pl-7 mb-3">Users with significant behavioral anomalies.</p>
-            <div className="text-3xl font-extrabold text-yellow-400 mb-3">{highRiskUsers} <span className="text-lg font-medium text-slate-400">Users Flagged</span></div>
-             <button onClick={() => toast.info('Temporarily locking all high-risk user accounts…')} className="w-full py-2 text-sm font-bold text-yellow-300 border border-yellow-500/40 hover:bg-yellow-900/20 rounded-lg flex items-center justify-center gap-2"><Lock className="w-4 h-4" />LOCK ACCOUNTS</button>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <h3 className="text-sm text-slate-400">Malware Alerts (24h)</h3>
+          <div className="text-3xl font-bold text-red-400">
+            {safeMalwareAlerts}
+          </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="bg-slate-900 border border-slate-800 rounded-xl">
-          <SectionHeader icon={<Laptop className="w-4 h-4 text-red-400" />} title="Most Vulnerable Endpoints" subtitle="Endpoints with the most detected CVEs." tooltipText="Endpoints ranked by vulnerability count from the CVE index. Red bars require immediate patching." />
+          <SectionHeader
+            icon={<Laptop className="w-4 h-4 text-blue-400" />}
+            title="OS Distribution"
+            subtitle="Distribution of operating systems"
+            tooltipText="Overview of OS landscape"
+          />
+
           <div className="px-5 pb-5">
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart layout="vertical" data={vulnerableEndpoints} margin={{ top: 0, right: 30, left: 20, bottom: 20 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
-              <XAxis type="number" stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} >
-                <Label value="CVE Count" position="bottom" offset={15} className="fill-slate-500 text-xs"/>
-              </XAxis>
-              <YAxis dataKey="workstation_id" type="category" stroke="#475569" tick={{ fill: '#cbd5e1', fontSize: 12 }} width={115} tickLine={false} />
-              <RechartsTooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }} cursor={{ fill: '#1e293b' }} />
-              <Bar dataKey="vulnerability_count" name="Vulnerabilities" radius={[0, 4, 4, 0]} barSize={24}>{vulnerableEndpoints.map((e, i) => <Cell key={i} fill={e.vulnerability_count > 10 ? '#ef4444' : e.vulnerability_count > 5 ? '#f97316' : '#eab308'} />)}</Bar>
-            </BarChart>
-          </ResponsiveContainer>
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={osDistribution}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis dataKey="name" tickFormatter={(v) => truncateLabel(v)} />
+                <YAxis />
+                <RechartsTooltip content={<CustomTooltipContent />} />
+                <Bar dataKey="value">
+                  {osDistribution.map((e, i) => (
+                    <Cell key={i} fill={e.fill || '#3b82f6'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
+
         <div className="bg-slate-900 border border-slate-800 rounded-xl">
-          <SectionHeader icon={<AlertTriangle className="w-4 h-4 text-orange-400" />} title="Top Policy Violators" subtitle="Users with the most security policy violations." tooltipText="Frequent violators may indicate intentional evasion or lack of security training." />
+          <SectionHeader
+            icon={<AlertTriangle className="w-4 h-4 text-orange-400" />}
+            title="Alert Types"
+            subtitle="Breakdown of alert categories"
+            tooltipText="Most common threats"
+          />
+
           <div className="px-5 pb-5">
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={policyViolators} margin={{ top: 10, right: 20, left: 0, bottom: 20 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-              <XAxis dataKey="employee_name" stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} >
-                <Label value="Employee Name" position="bottom" offset={15} className="fill-slate-500 text-xs"/>
-              </XAxis>
-              <YAxis stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} >
-                 <Label value="Violation Count" angle={-90} position="left" offset={-5} className="fill-slate-500 text-xs"/>
-              </YAxis>
-              <RechartsTooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155'}} cursor={{ fill: '#1e293b' }} />
-              <Bar dataKey="violation_count" name="Violations" radius={[4, 4, 0, 0]} barSize={40}>{policyViolators.map((e: PolicyViolator, i: number) => <Cell key={i} fill={i === 0 ? '#f97316' : '#fb923c'} />)}</Bar>
-            </BarChart>
-          </ResponsiveContainer>
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart layout="vertical" data={alertTypes}>
+                <XAxis type="number" />
+                <YAxis
+                  dataKey="name"
+                  type="category"
+                  tickFormatter={(v) => truncateLabel(v, 15)}
+                />
+                <RechartsTooltip content={<CustomTooltipContent />} />
+                <Bar dataKey="value">
+                  {alertTypes.map((e, i) => (
+                    <Cell key={i} fill={e.fill || '#f97316'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
       </div>
 
       <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-        <SectionHeader icon={<Activity className="w-4 h-4 text-blue-400" />} title="Endpoint Event Log & Response" subtitle="Real-time stream of EDR agent alerts from the wazuh_events schema." tooltipText="Click a row to expand the full JSON log. Critical events require immediate quarantine action." />
+        <SectionHeader
+          icon={<Activity className="w-4 h-4 text-red-400" />}
+          title="Endpoint Event Log"
+          subtitle={`Live stream of ${safeWazuhEvents.length} alerts`}
+          tooltipText="Expand row for full JSON"
+        />
+
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm min-w-[800px]"><thead><tr className="bg-slate-950 border-b border-slate-800"><th className="px-5 py-3 text-xs uppercase font-medium text-slate-400">Timestamp</th><th className="px-5 py-3 text-xs uppercase font-medium text-slate-400">Endpoint & User</th><th className="px-5 py-3 text-xs uppercase font-medium text-slate-400">Threat Description</th><th className="px-5 py-3 text-xs uppercase font-medium text-slate-400">Severity</th><th className="px-5 py-3 text-xs uppercase font-medium text-slate-400 text-right">Actions</th></tr></thead>
-            <tbody>{wazuhEvents.map((ev) => <EventRow key={ev.id} ev={ev} onQuarantine={handleQuarantine} />)}</tbody>
+          <table className="w-full text-sm min-w-[800px]">
+            <thead>
+              <tr className="bg-slate-950 border-b border-slate-800">
+                <th className="px-5 py-3">Timestamp</th>
+                <th className="px-5 py-3">Endpoint</th>
+                <th className="px-5 py-3">Threat</th>
+                <th className="px-5 py-3">Severity</th>
+                <th className="px-5 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {safeWazuhEvents.map((ev) => (
+                <EventRow
+                  key={ev.id ?? `${ev.timestamp}-${ev.workstationId}`}
+                  ev={ev}
+                  onQuarantine={handleQuarantine}
+                />
+              ))}
+            </tbody>
           </table>
         </div>
       </div>
