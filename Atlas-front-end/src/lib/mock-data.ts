@@ -1,158 +1,143 @@
-
-import { OverviewData, APIMonitoringData, NetworkTrafficData, EndpointSecurityData, DbMonitoringData, CaseManagementResponse } from './types';
-
-export const mockOverviewData: OverviewData = {
-  total_api_calls: 1250000,
-  total_network_traffic: 4500,
-  total_endpoint_events: 850,
-  total_db_queries: 250000,
-  api_call_trends: [
-    { time: '00:00', calls: 2200 },
-    { time: '01:00', calls: 2400 },
-    { time: '02:00', calls: 2300 },
-    { time: '03:00', calls: 2600 },
-    { time: '04:00', calls: 2900 },
-    { time: '05:00', calls: 3200 },
-    { time: '06:00', calls: 3500 },
+// Includes both standard backend keys and Figma-specific keys so it works on any UI branch
+export const mockOverviewData = {
+  apiRequests: 1258345,
+  errorRate: 1.2,
+  activeAlerts: 3,
+  costRisk: 4,
+  aiBriefing: "ATLAS AI detected abnormal API consumption on high-cost GenAI services. Failing nodes: Auth-Svc. Recent anomalies: SSH Brute Force.",
+  microservices: [
+    { id: '1', name: 'Auth-Svc', type: 'Gateway', status: 'Failing', position: { top: 0, left: 0 }, connections: [] },
+    { id: '2', name: 'Payment-GW', type: 'Service', status: 'Healthy', position: { top: 0, left: 0 }, connections: [] },
+    { id: '3', name: 'GenAI Service', type: 'Service', status: 'Healthy', position: { top: 0, left: 0 }, connections: [] },
+    { id: '4', name: 'Flipkart DB', type: 'Database', status: 'Healthy', position: { top: 0, left: 0 }, connections: [] },
   ],
-  top_attacked_apps: [
-    { app: 'Auth-Svc', attacks: 320 },
-    { app: 'Payment-GW', attacks: 250 },
-    { app: 'GenAI Service', attacks: 180 },
-    { app: 'Flipkart DB', attacks: 120 },
-    { app: 'Naukri Portal', attacks: 90 },
+  apiRequestsByApp: [
+    { app: 'Auth-Svc', requests: 450000 },
+    { app: 'Payment-GW', requests: 320000 },
+    { app: 'GenAI Service', requests: 150000 },
+    { app: 'Flipkart DB', requests: 90000 },
+    { app: 'Naukri Portal', requests: 50000 },
   ],
-  top_threat_ips: [
-    { ip: '185.220.101.45', app: 'Auth-Svc', threat: 'SSH Brute Force' },
-    { ip: '103.77.237.12', app: 'Payment-GW', threat: 'SQL Injection' },
-    { ip: '45.137.65.132', app: 'GenAI Service', threat: 'Data Exfiltration' },
-    { ip: '212.102.40.208', app: 'Flipkart DB', threat: 'DDoS Attempt' },
-    { ip: '198.54.130.22', app: 'Naukri Portal', threat: 'Cross-Site Scripting' },
+  appAnomalies: [
+    { name: 'Auth-Svc', anomalies: 85 },
+    { name: 'Payment-GW', anomalies: 42 },
+    { name: 'GenAI Service', anomalies: 27 },
+    { name: 'Flipkart DB', anomalies: 12 },
+    { name: 'Naukri Portal', anomalies: 5 },
+  ],
+  systemAnomalies: [
+    { id: 'INC-001', service: 'Auth-Svc', type: 'SSH Brute Force', severity: 'Critical', timestamp: '10 mins ago' }
   ]
 };
 
-export const mockApiMonitoringData: APIMonitoringData = {
-  total_requests: 1200000,
-  total_errors: 45000,
-  average_latency: 120,
-  top_consumers: [
-    { app_name: 'Auth-Svc', requests: 450000, cost: 450 },
-    { app_name: 'Payment-GW', requests: 300000, cost: 300 },
-    { app_name: 'GenAI Service', requests: 200000, cost: 200 },
-    { app_name: 'Flipkart DB', requests: 150000, cost: 150 },
-    { app_name: 'Naukri Portal', requests: 100000, cost: 100 },
+export const mockApiMonitoringData = {
+  // Standard Keys
+  apiCallsToday: 1258345,
+  blockedRequests: 12456,
+  avgLatency: 12.5,
+  estimatedCost: 314.50,
+  apiConsumptionByApp: [
+    { app: 'Auth-Svc', actual: 12500, limit: 10000 },
+    { app: 'Payment-GW', actual: 8000, limit: 12000 },
+    { app: 'GenAI Service', actual: 4500, limit: 4000 },
   ],
-  top_routes_by_request: [
-    { app_name: 'Auth-Svc', path: '/api/v1/login', requests: 250000 },
-    { app_name: 'Payment-GW', path: '/api/v1/process', requests: 150000 },
-    { app_name: 'GenAI Service', path: '/api/v1/generate', requests: 100000 },
-    { app_name: 'Flipkart DB', path: '/api/v1/products', requests: 75000 },
-    { app_name: 'Naukri Portal', path: '/api/v1/jobs', requests: 50000 },
+  apiRouting: [
+    { id: 1, app: 'Auth-Svc', path: '/v1/login', method: 'POST', cost: 0.005, trend: 15, action: 'OK' }
   ],
-  top_routes_by_latency: [
-    { app_name: 'GenAI Service', path: '/api/v1/generate', latency: 550 },
-    { app_name: 'Payment-GW', path: '/api/v1/process', latency: 250 },
-    { app_name: 'Auth-Svc', path: '/api/v1/login', latency: 150 },
-    { app_name: 'Flipkart DB', path: '/api/v1/products', latency: 100 },
-    { app_name: 'Naukri Portal', path: '/api/v1/jobs', latency: 80 },
+  // Figma Keys
+  totalApiCalls: 1258345,
+  blockedThreats: 12456,
+  globalAvailability: 99.8,
+  activeIncidents: 3,
+  apiOveruse: [
+    { application_name: 'Auth-Svc', currentRpm: 12500, limitRpm: 10000 },
+    { application_name: 'Payment-GW', currentRpm: 8000, limitRpm: 12000 },
   ],
-  cost_trends: [
-    { date: '2023-01', cost: 1200 },
-    { date: '2023-02', cost: 1300 },
-    { date: '2023-03', cost: 1400 },
-    { date: '2023-04', cost: 1500 },
-    { date: '2023-05', cost: 1600 },
+  mostAbusedEndpoints: [
+    { endpoint: '/v1/login', violations: 4500, severity: 'critical' },
   ],
-};
-
-export const mockNetworkTrafficData: NetworkTrafficData = {
-  total_traffic_gb: 4500,
-  total_anomalies: 75,
-  anomaly_trends: [
-    { time: '00:00', anomalies: 5 },
-    { time: '01:00', anomalies: 7 },
-    { time: '02:00', anomalies: 6 },
-    { time: '03:00', anomalies: 8 },
-    { time: '04:00', anomalies: 10 },
-    { time: '05:00', anomalies: 12 },
-    { time: '06:00', anomalies: 15 },
+  topConsumers: [
+    { consumer: '185.220.101.45', application_name: 'Auth-Svc', total_calls: 850000, average_cost: 0.005, is_overuse: true },
   ],
-  top_source_ips: [
-    { ip: '185.220.101.45', traffic_gb: 500, threat_type: 'SSH Brute Force' },
-    { ip: '103.77.237.12', traffic_gb: 400, threat_type: 'SQL Injection' },
-    { ip: '45.137.65.132', traffic_gb: 300, threat_type: 'Data Exfiltration via SFTP' },
-    { ip: '212.102.40.208', traffic_gb: 200, threat_type: 'DDoS Attempt' },
-    { ip: '198.54.130.22', traffic_gb: 100, threat_type: 'Cross-Site Scripting' },
-  ],
-  top_target_apps: [
-    { app: 'Auth-Svc', traffic_gb: 1200, threat_type: 'SSH Brute Force' },
-    { app: 'Payment-GW', traffic_gb: 1000, threat_type: 'SQL Injection' },
-    { app: 'GenAI Service', traffic_gb: 800, threat_type: 'Data Exfiltration via SFTP' },
-    { app: 'Flipkart DB', traffic_gb: 600, threat_type: 'DDoS Attempt' },
-    { app: 'Naukri Portal', traffic_gb: 400, threat_type: 'Cross-Site Scripting' },
-  ],
-};
-
-export const mockEndpointSecurityData: EndpointSecurityData = {
-  total_events: 850,
-  total_quarantined: 45,
-  top_detected_threats: [
-    { threat: 'Cryptominer.exe', count: 120, severity: 'High' },
-    { threat: 'Adware.Win32.InstallCore', count: 95, severity: 'Medium' },
-    { threat: 'Ransomware.WannaCry', count: 60, severity: 'Critical' },
-    { threat: 'Trojan.GenericKD.3121337', count: 55, severity: 'High' },
-    { threat: 'Backdoor.PowerShell', count: 40, severity: 'High' },
-  ],
-  events_by_host: [
-    { hostname: 'prod-web-01', threat: 'Cryptominer.exe', status: 'Quarantined' },
-    { hostname: 'dev-db-03', threat: 'Adware.Win32.InstallCore', status: 'Detected' },
-    { hostname: 'qa-app-02', threat: 'Ransomware.WannaCry', status: 'Quarantined' },
-    { hostname: 'prod-api-05', threat: 'Trojan.GenericKD.3121337', status: 'Detected' },
-    { hostname: 'corp-laptop-112', threat: 'Backdoor.PowerShell', status: 'Detected' },
-  ],
-  recent_events: [
-    { timestamp: '2023-10-27T10:00:00Z', hostname: 'prod-web-01', threat: 'Cryptominer.exe', action: 'Quarantined' },
-    { timestamp: '2023-10-27T10:05:00Z', hostname: 'dev-db-03', threat: 'Adware.Win32.InstallCore', action: 'Detected' },
-    { timestamp: '2023-10-27T10:10:00Z', hostname: 'qa-app-02', threat: 'Ransomware.WannaCry', action: 'Quarantined' },
-    { timestamp: '2023-10-27T10:15:00Z', hostname: 'prod-api-05', threat: 'Trojan.GenericKD.3121337', action: 'Detected' },
-    { timestamp: '2023-10-27T10:20:00Z', hostname: 'corp-laptop-112', threat: 'Backdoor.PowerShell', action: 'Detected' },
+  activeMitigations: [
+    { target: 'Auth-Svc', offender: '185.220.101.45', violation_type: 'Rate Limit Exceeded', details: 'Trend +800%', action: 'BLOCK' },
   ]
 };
 
-export const mockDbMonitoringData: DbMonitoringData = {
-  total_queries: 250000,
-  total_suspicious_queries: 120,
-  suspicious_query_trends: [
-    { time: '00:00', queries: 10 },
-    { time: '01:00', queries: 12 },
-    { time: '02:00', queries: 11 },
-    { time: '03:00', queries: 14 },
-    { time: '04:00', queries: 16 },
-    { time: '05:00', queries: 18 },
-    { time: '06:00', queries: 20 },
-  ],
-  top_active_users: [
-    { user: 'svc-data-loader', queries: 50000, last_activity: '2023-10-27T10:00:00Z' },
-    { user: 'app-user-prod', queries: 45000, last_activity: '2023-10-27T10:05:00Z' },
-    { user: 'dev-analyst-01', queries: 30000, last_activity: '2023-10-27T10:10:00Z' },
-    { user: 'reporting-engine', queries: 25000, last_activity: '2023-10-27T10:15:00Z' },
-    { user: 'admin', queries: 15000, last_activity: '2023-10-27T10:20:00Z' },
-  ],
-  top_queried_tables: [
-    { database: 'Flipkart DB', table: 'orders', queries: 100000 },
-    { database: 'Naukri Portal', table: 'job_postings', queries: 80000 },
-    { database: 'Auth-Svc', table: 'user_sessions', queries: 40000 },
-    { database: 'Payment-GW', table: 'transactions', queries: 20000 },
-    { database: 'GenAI Service', table: 'usage_logs', queries: 10000 },
+export const mockNetworkTrafficData = {
+  bandwidth: 4500,
+  activeConnections: 12500,
+  droppedPackets: 850,
+  networkAnomalies: [
+    { id: 1, sourceIp: '185.220.101.45', destIp: '10.0.1.42', app: 'Auth-Svc', port: 443, type: 'SSH Brute Force Attack', severity: 'Critical' },
+    { id: 2, sourceIp: '103.77.237.12', destIp: '10.0.2.15', app: 'Payment-GW', port: 8080, type: 'Port Scan Detected', severity: 'High' },
+    { id: 3, sourceIp: '45.137.65.132', destIp: '192.168.1.101', app: 'GenAI Service', port: 22, type: 'Data Exfiltration via SFTP', severity: 'Critical' },
+    { id: 4, sourceIp: '212.102.40.208', destIp: '172.16.0.55', app: 'Flipkart DB', port: 5432, type: 'Suspicious Outbound Connection', severity: 'Medium' },
   ]
 };
 
-export const mockCaseManagementData: CaseManagementResponse = {
+export const mockEndpointSecurityData = {
+  monitoredEndpoints: 1250,
+  offlineEndpoints: 15,
+  malwareAlerts: 3,
+  policyViolations: 24,
+  highRiskUsers: 5,
+  vulnerableEndpoints: [
+    { workstation_id: 'WKST-2088', vulnerability_count: 14 },
+    { workstation_id: 'LAPTOP-DEV-04', vulnerability_count: 8 },
+    { workstation_id: 'MAC-HR-02', vulnerability_count: 3 },
+  ],
+  policyViolators: [
+    { employee_name: 'john.doe', violation_count: 12 },
+    { employee_name: 'sarah.smith', violation_count: 7 },
+  ],
+  wazuhEvents: [
+    { id: 1, timestamp: new Date().toISOString(), workstation_id: 'WKST-2088', employee_name: 'john.doe', description: 'Cryptominer.exe detected', severity: 'Critical', full_log: { process: 'cryptominer.exe' } },
+    { id: 2, timestamp: new Date().toISOString(), workstation_id: 'LAPTOP-DEV-04', employee_name: 'dev.user01', description: 'Firewall policy bypassed', severity: 'High', full_log: { rule: 'allow_all' } },
+  ]
+};
+
+export const mockDbMonitoringData = {
+  criticalDataExport: { application_name: 'Flipkart DB', bytes_exported: 4500000000 }, 
+  connectionPool: { application_name: 'Auth-Svc', utilization_percent: 92, avg_query_latency_ms: 250 },
+  authFailures: 450,
+  activeConnections: 350,
+  avgQueryLatency: 12.5,
+  dataExportVolume: 4.5,
+  dlpByTargetApp: [
+    { app: 'Flipkart DB', application_name: 'Flipkart DB', bytes_exported: 45, count: 45 },
+    { app: 'Payment-GW', application_name: 'Payment-GW', bytes_exported: 12, count: 12 },
+  ],
+  operationsByApp: [
+    { app: 'Flipkart DB', app_name: 'Flipkart DB', select_count: 80000, insert_count: 15000, update_count: 5000, delete_count: 1200, SELECT: 80000, INSERT: 15000, UPDATE: 5000, DELETE: 1200 },
+  ],
+  suspiciousActivity: [
+    { id: 1, user: 'dev_temp', application_name: 'Flipkart DB', app: 'Flipkart DB', table: 'orders', type: 'DELETE', reason: 'Bulk DELETE on sensitive table' },
+  ]
+};
+
+export const mockCaseManagementData = {
+  kpis: { criticalOpenCases: 3, mttr: "14m 22s", unassignedEscalations: 5 },
   cases: [
-    { id: 'CASE-001', title: 'SSH Brute Force on Auth-Svc', status: 'Open', assignee: 'Analyst 1', created_at: '2023-10-27T10:00:00Z' },
-    { id: 'CASE-002', title: 'SQL Injection attempt on Payment-GW', status: 'In Progress', assignee: 'Analyst 2', created_at: '2023-10-27T11:00:00Z' },
-    { id: 'CASE-003', title: 'Data Exfiltration via SFTP from GenAI Service', status: 'Closed', assignee: 'Analyst 1', created_at: '2023-10-26T09:00:00Z' },
-    { id: 'CASE-004', title: 'DDoS attempt on Flipkart DB', status: 'Open', assignee: 'Analyst 3', created_at: '2023-10-27T12:00:00Z' },
-    { id: 'CASE-005', title: 'Cross-Site Scripting on Naukri Portal', status: 'In Progress', assignee: 'Analyst 2', created_at: '2023-10-27T13:00:00Z' },
+    { caseId: 'INC-9042', id: 'INC-9042', scopeTags: ['Auth-Svc', 'External IP'], aiThreatNarrative: 'External IP brute-forced Auth-Svc.', assigneeName: 'Sarah Smith', assigneeInitials: 'SS', status: 'Open', playbookActions: ['Block External IP'], targetApp: 'Auth-Svc' },
+    { caseId: 'INC-9043', id: 'INC-9043', scopeTags: ['Flipkart DB', 'DLP Alert'], aiThreatNarrative: 'Mass data export detected from service account.', assigneeName: 'John Doe', assigneeInitials: 'JD', status: 'Investigating', playbookActions: ['Lock DB User'], targetApp: 'Flipkart DB' },
+  ]
+};
+
+// --- NEW MOCK DATA ---
+export const mockUsersData = [
+  { id: 1, name: 'Sarah Smith', email: 'sarah@atlas.local', role: 'Security Admin', status: 'Active', avatar: '' },
+  { id: 2, name: 'John Doe', email: 'john@atlas.local', role: 'SOC Analyst', status: 'Active', avatar: '' },
+  { id: 3, name: 'Dev Ops', email: 'dev@atlas.local', role: 'Viewer', status: 'Pending', avatar: '' },
+];
+
+export const mockReportsData = {
+  scheduledReports: [
+    { id: 1, title: 'Weekly Executive Threat Briefing', description: 'High-level security overview', schedule: 'Weekly (Monday)', active: true, configureLabel: 'Configure' },
+    { id: 2, API: 'API Consumption & Cost', description: 'Detailed breakdown of API metrics', schedule: 'Monthly', active: false, configureLabel: 'Configure' }
+  ],
+  recentDownloads: [
+    { id: 1, fileName: 'Auth-Svc_Audit.pdf', targetAppScope: 'Auth-Svc', generated: 'Today', size: '2.4 MB', downloadUrl: '#' },
+    { id: 2, fileName: 'Network_Anomalies.csv', targetAppScope: 'Global', generated: 'Yesterday', size: '1.8 MB', downloadUrl: '#' }
   ]
 };

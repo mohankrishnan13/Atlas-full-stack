@@ -7,6 +7,8 @@ import {
   mockEndpointSecurityData,
   mockDbMonitoringData,
   mockCaseManagementData,
+  mockUsersData,
+  mockReportsData
 } from './mock-data';
 
 // ── NEW: Environment State Manager (kept for UI compatibility) ──
@@ -39,10 +41,10 @@ export async function apiGet<T>(endpoint: string): Promise<T> {
   console.log(`[MOCK API GET] Intercepted request for: ${endpoint}`);
   
   // Simulate network latency
-  await new Promise(res => setTimeout(res, SIMULATED_DELAY_MS));
+  await new Promise(res => setTimeout(res, 400));
 
-  // Route to the correct mock data based on the endpoint
-  if (endpoint.includes('/overview')) {
+  // Note: Using broad .includes() checks to catch both standard and figma naming conventions
+  if (endpoint.includes('/overview') || endpoint.includes('/dashboard')) {
     return Promise.resolve(mockOverviewData as T);
   }
   if (endpoint.includes('/api-monitoring')) {
@@ -54,11 +56,21 @@ export async function apiGet<T>(endpoint: string): Promise<T> {
   if (endpoint.includes('/endpoint-security')) {
     return Promise.resolve(mockEndpointSecurityData as T);
   }
-  if (endpoint.includes('/database-monitoring')) {
+  // FIX: Frontend calls /db-monitoring, not /database-monitoring
+  if (endpoint.includes('/db-monitoring') || endpoint.includes('/database-monitoring')) {
     return Promise.resolve(mockDbMonitoringData as T);
   }
-  if (endpoint.includes('/case-management')) {
+  // FIX: Case Management URL is /incidents
+  if (endpoint.includes('/case-management') || endpoint.includes('/incidents')) {
     return Promise.resolve(mockCaseManagementData as T);
+  }
+  // FIX: Settings User load
+  if (endpoint.includes('/auth/users') || endpoint.includes('/users') || endpoint.includes('/team')) {
+    return Promise.resolve(mockUsersData as T);
+  }
+  // FIX: Reports load
+  if (endpoint.includes('/reports')) {
+    return Promise.resolve(mockReportsData as T);
   }
 
   // Fallback for any unhandled endpoint
