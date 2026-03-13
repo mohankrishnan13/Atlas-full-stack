@@ -411,6 +411,9 @@ class FigmaDatabaseMonitoringResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 # Action Request Schemas
 # ─────────────────────────────────────────────────────────────────────────────
+class ApiBlockRouteRequest(BaseModel):
+    app: str
+    path: str
 
 class QuarantineRequest(BaseModel):
     workstationId: str

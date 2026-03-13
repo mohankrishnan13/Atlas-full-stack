@@ -21,7 +21,7 @@ function ChartTooltip({ active, payload, label }: any) {
       <p className="text-slate-200 font-semibold mb-1 text-sm">{label}</p>
       {payload.map((entry: any, i: number) => (
         <p key={i} className="text-xs text-slate-400">
-          {entry.name}: <span className="text-slate-100 font-mono">{entry.value.toLocaleString()}</span>
+          {entry.name}: <span className="text-slate-100 font-mono">{(Number(entry.value) || 0).toLocaleString()}</span>
         </p>
       ))}
     </div>
@@ -70,9 +70,22 @@ export default function DatabaseMonitoringPage() {
   if (loading) return <div className="p-6"><LoaderCircle className="w-6 h-6 animate-spin text-slate-500" /></div>;
   if (!data) return <div className="flex items-center justify-center h-48 text-slate-500">No database monitoring data available from backend.</div>;
 
-  const { criticalDataExport, connectionPool, authFailures, dlpByTargetApp, operationsByApp, suspiciousActivity } = data;
-  const exfilData = [...dlpByTargetApp].sort((a, b) => b.bytes_exported - a.bytes_exported).slice(0, 6);
-  const suspiciousQueriesData = operationsByApp.map(op => ({ name: op.app_name, queries: op.delete_count + op.insert_count })).sort((a, b) => b.queries - a.queries).slice(0, 5);
+  // Safe Variable Parsing
+  const { criticalDataExport, connectionPool, dlpByTargetApp, operationsByApp, suspiciousActivity } = data;
+  const safeAuthFailures = Number(data.authFailures) || 0;
+
+  const exfilData = [...dlpByTargetApp]
+    .map(d => ({ ...d, bytes_exported: Number(d.bytes_exported) || 0 }))
+    .sort((a, b) => b.bytes_exported - a.bytes_exported)
+    .slice(0, 6);
+
+  const suspiciousQueriesData = operationsByApp
+    .map(op => ({ 
+        name: op.app_name, 
+        queries: (Number(op.delete_count) || 0) + (Number(op.insert_count) || 0)
+    }))
+    .sort((a, b) => b.queries - a.queries)
+    .slice(0, 5);
 
   return (
     <div className="space-y-6">
@@ -97,7 +110,7 @@ export default function DatabaseMonitoringPage() {
         <div className="bg-slate-900 border border-yellow-900/50 rounded-lg p-5 flex flex-col justify-between">
             <div className="flex items-center gap-2 mb-3"><Lock className="w-5 h-5 text-yellow-500" /><h3 className="text-slate-400 text-sm font-medium uppercase tracking-wide">Failed DB Auth Attempts</h3></div>
             <div className="text-sm text-slate-400">Multiple failures from a single source IP detected.</div>
-            <div className="text-lg font-bold text-yellow-400">{authFailures.toLocaleString()} attempts</div>
+            <div className="text-lg font-bold text-yellow-400">{safeAuthFailures.toLocaleString()} attempts</div>
         </div>
       </div>
 

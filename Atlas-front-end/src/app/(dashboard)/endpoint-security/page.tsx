@@ -78,7 +78,19 @@ export default function EndpointSecurityPage() {
   if (loading) return <div className="p-6"><LoaderCircle className="w-6 h-6 animate-spin text-slate-500" /></div>;
   if (!data) return <div className="flex items-center justify-center h-48 text-slate-500">No endpoint security data available from backend.</div>;
 
-  const { monitoredEndpoints, offlineEndpoints, malwareAlerts, policyViolations, highRiskUsers, vulnerableEndpoints, policyViolators, wazuhEvents } = data;
+  // Safe Variable Parsing
+  const { malwareAlerts, policyViolations, highRiskUsers, wazuhEvents } = data;
+  const safeMonitored = Number(data.monitoredEndpoints) || 0;
+  const safeOffline = Number(data.offlineEndpoints) || 0;
+
+  const formattedVulnerable = data.vulnerableEndpoints.map(e => ({
+    ...e, vulnerability_count: Number(e.vulnerability_count) || 0
+  }));
+
+  const formattedViolators = data.policyViolators.map(e => ({
+    ...e, violation_count: Number(e.violation_count) || 0
+  }));
+
   const criticalEvents = wazuhEvents.filter(ev => ev.severity === 'Critical');
 
   return (
@@ -88,7 +100,7 @@ export default function EndpointSecurityPage() {
           <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2"><Shield className="w-5 h-5 text-blue-400" />Endpoint Security</h1>
           <p className="text-xs text-slate-500 mt-0.5 ml-7">Real-time monitoring of managed endpoints, policy compliance, and threats from the EDR agent schema.</p>
         </div>
-        <div className="flex items-center gap-3 text-xs text-slate-500"><span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-green-400" />{monitoredEndpoints.toLocaleString()} Monitored</span><span className="text-slate-700">|</span><span className="flex items-center gap-1.5 text-orange-400"><span className="w-2 h-2 rounded-full bg-orange-400" />{offlineEndpoints.toLocaleString()} Offline</span></div>
+        <div className="flex items-center gap-3 text-xs text-slate-500"><span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-green-400" />{safeMonitored.toLocaleString()} Monitored</span><span className="text-slate-700">|</span><span className="flex items-center gap-1.5 text-orange-400"><span className="w-2 h-2 rounded-full bg-orange-400" />{safeOffline.toLocaleString()} Offline</span></div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -117,14 +129,14 @@ export default function EndpointSecurityPage() {
           <SectionHeader icon={<Laptop className="w-4 h-4 text-red-400" />} title="Most Vulnerable Endpoints" subtitle="Endpoints with the most detected CVEs." tooltipText="Endpoints ranked by vulnerability count from the CVE index. Red bars require immediate patching." />
           <div className="px-5 pb-5">
           <ResponsiveContainer width="100%" height={260}>
-            <BarChart layout="vertical" data={vulnerableEndpoints} margin={{ top: 0, right: 30, left: 20, bottom: 20 }}>
+            <BarChart layout="vertical" data={formattedVulnerable} margin={{ top: 0, right: 30, left: 20, bottom: 20 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
               <XAxis type="number" stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} >
                 <Label value="CVE Count" position="bottom" offset={15} className="fill-slate-500 text-xs"/>
               </XAxis>
               <YAxis dataKey="workstation_id" type="category" stroke="#475569" tick={{ fill: '#cbd5e1', fontSize: 12 }} width={115} tickLine={false} />
               <RechartsTooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }} cursor={{ fill: '#1e293b' }} />
-              <Bar dataKey="vulnerability_count" name="Vulnerabilities" radius={[0, 4, 4, 0]} barSize={24}>{vulnerableEndpoints.map((e, i) => <Cell key={i} fill={e.vulnerability_count > 10 ? '#ef4444' : e.vulnerability_count > 5 ? '#f97316' : '#eab308'} />)}</Bar>
+              <Bar dataKey="vulnerability_count" name="Vulnerabilities" radius={[0, 4, 4, 0]} barSize={24}>{formattedVulnerable.map((e, i) => <Cell key={i} fill={e.vulnerability_count > 10 ? '#ef4444' : e.vulnerability_count > 5 ? '#f97316' : '#eab308'} />)}</Bar>
             </BarChart>
           </ResponsiveContainer>
           </div>
@@ -133,7 +145,7 @@ export default function EndpointSecurityPage() {
           <SectionHeader icon={<AlertTriangle className="w-4 h-4 text-orange-400" />} title="Top Policy Violators" subtitle="Users with the most security policy violations." tooltipText="Frequent violators may indicate intentional evasion or lack of security training." />
           <div className="px-5 pb-5">
           <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={policyViolators} margin={{ top: 10, right: 20, left: 0, bottom: 20 }}>
+            <BarChart data={formattedViolators} margin={{ top: 10, right: 20, left: 0, bottom: 20 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
               <XAxis dataKey="employee_name" stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} >
                 <Label value="Employee Name" position="bottom" offset={15} className="fill-slate-500 text-xs"/>
@@ -142,7 +154,7 @@ export default function EndpointSecurityPage() {
                  <Label value="Violation Count" angle={-90} position="left" offset={-5} className="fill-slate-500 text-xs"/>
               </YAxis>
               <RechartsTooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155'}} cursor={{ fill: '#1e293b' }} />
-              <Bar dataKey="violation_count" name="Violations" radius={[4, 4, 0, 0]} barSize={40}>{policyViolators.map((e: PolicyViolator, i: number) => <Cell key={i} fill={i === 0 ? '#f97316' : '#fb923c'} />)}</Bar>
+              <Bar dataKey="violation_count" name="Violations" radius={[4, 4, 0, 0]} barSize={40}>{formattedViolators.map((e: PolicyViolator, i: number) => <Cell key={i} fill={i === 0 ? '#f97316' : '#fb923c'} />)}</Bar>
             </BarChart>
           </ResponsiveContainer>
           </div>

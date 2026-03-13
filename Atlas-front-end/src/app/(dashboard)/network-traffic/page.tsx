@@ -189,10 +189,16 @@ export default function NetworkTrafficPage() {
   if (loading) return <LoadingSkeleton />;
   if (!data) return <div className="flex items-center justify-center h-48 text-slate-500">No network traffic data available.</div>;
 
+  // Safe Variable Parsing
+  const safeDropped = Number(data.droppedPackets) || 0;
+  const safeActive = Number(data.activeConnections) || 0;
+  const safeBandwidth = Number(data.bandwidth) || 0;
+
   const highestBandwidthAnomaly = data.networkAnomalies?.[0];
-  const unknownMacs = Math.max(1, Math.ceil(data.droppedPackets / 50));
-  const bandwidthGBs = (data.bandwidth / 1024).toFixed(2);
-  const droppedPct = data.activeConnections ? ((data.droppedPackets / (data.activeConnections * 100)) * 100).toFixed(1) : '—';
+  const unknownMacs = Math.max(1, Math.ceil(safeDropped / 50));
+  const bandwidthGBs = (safeBandwidth / 1024).toFixed(2);
+  
+  const droppedPct = safeActive > 0 ? ((safeDropped / safeActive) * 100).toFixed(1) : '—';
 
   return (
     <div className="space-y-6 pb-8">
@@ -230,9 +236,9 @@ export default function NetworkTrafficPage() {
           title="Critical Packet Loss"
           subtitle="Application or network layer experiencing the highest rate of dropped packets."
           tooltip="Dropped packets indicate failed transmissions. High packet loss causes slowdowns and timeouts. Anything above 1% on a production network is worth investigating."
-          value={data.networkAnomalies?.find((a) => a.type?.toLowerCase().includes('spike'))?.app ?? (data.droppedPackets > 100 ? 'Network Layer' : '✓ Within Normal Range')}
+          value={data.networkAnomalies?.find((a) => a.type?.toLowerCase().includes('spike'))?.app ?? (safeDropped > 100 ? 'Network Layer' : '✓ Within Normal Range')}
           valueColor="text-orange-400"
-          meta={`${data.droppedPackets.toLocaleString()} dropped packets per minute${droppedPct !== '—' ? ` (${droppedPct}% of total traffic)` : ''}`}
+          meta={`${safeDropped.toLocaleString()} dropped packets per minute${droppedPct !== '—' ? ` (${droppedPct}% of total traffic)` : ''}`}
         />
         <KpiCard
           icon={<ShieldAlert className="w-4 h-4 text-red-500" />}
@@ -294,7 +300,7 @@ export default function NetworkTrafficPage() {
               )}
               <div id="external-authorized-node" ref={externalAuthorizedRef} className="bg-slate-900 border border-blue-500/30 p-3 rounded-lg w-full md:w-60">
                 <div className="flex items-center gap-2 mb-1.5"><Globe className="w-4 h-4 text-blue-500" /><span className="text-blue-400 font-mono text-xs">Authorized Traffic</span></div>
-                <div className="text-xs text-slate-500">{data.activeConnections.toLocaleString()} active sessions</div>
+                <div className="text-xs text-slate-500">{safeActive.toLocaleString()} active sessions</div>
               </div>
             </div>
 

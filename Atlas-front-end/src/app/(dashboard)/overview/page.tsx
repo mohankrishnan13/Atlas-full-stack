@@ -98,7 +98,17 @@ export default function OverviewPage() {
   if (loading) return <div className="p-6"><LoaderCircle className="w-6 h-6 animate-spin text-slate-500" /></div>;
   if (!data) return <div className="flex items-center justify-center h-48 text-slate-500">No backend telemetry data available.</div>;
 
-  const riskData = data.appAnomalies.filter(a => a.anomalies > 0).sort((a, b) => b.anomalies - a.anomalies).slice(0, 5);
+  // FIX: Ensure data values are parsed as numbers to prevent charting glitches
+  const formattedApiRequests = data.apiRequestsByApp.map(item => ({
+    ...item,
+    requests: Number(item.requests) || 0
+  }));
+
+  const riskData = data.appAnomalies
+    .map(a => ({ ...a, anomalies: Number(a.anomalies) || 0 }))
+    .filter(a => a.anomalies > 0)
+    .sort((a, b) => b.anomalies - a.anomalies)
+    .slice(0, 5);
 
   return (
     <div className="space-y-6 pb-8">
@@ -113,8 +123,19 @@ export default function OverviewPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {data.microservices.map(svc => {
             const reqData = data.apiRequestsByApp.find(a => a.app.toLowerCase().includes(svc.name.toLowerCase().split('-')[0]));
-            const rpm = reqData ? reqData.requests : svc.connections.length * 150;
-            return <AppHealthCard key={svc.id} appName={svc.name} load={`${rpm.toLocaleString()} req/m`} status={svc.status} onAction={() => handleMitigate(svc.name)} />
+            
+            // FIX: Added fallbacks to prevent the `toLocaleString` undefined error
+            const rpm = Number(reqData?.requests) || (svc?.connections?.length || 0) * 150;
+            
+            return (
+              <AppHealthCard 
+                key={svc.id} 
+                appName={svc.name} 
+                load={`${(rpm || 0).toLocaleString()} req/m`} 
+                status={svc.status} 
+                onAction={() => handleMitigate(svc.name)} 
+              />
+            );
           })}
         </div>
       </div>
@@ -123,7 +144,7 @@ export default function OverviewPage() {
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
           <SectionHeader icon={<TrendingUp className="w-4 h-4 text-blue-400" />} title="API Consumption by Application" subtitle="Total API requests per minute for each application" tooltipText="Data fetched from the telemetry-service API, mapped to the ApiRequestsByApp schema." />
           <ResponsiveContainer width="100%" height={280}> 
-            <BarChart data={data.apiRequestsByApp} margin={{ top: 5, right: 20, left: 10, bottom: 20 }}>
+            <BarChart data={formattedApiRequests} margin={{ top: 5, right: 20, left: 10, bottom: 20 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
               <XAxis dataKey="app" stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#334155' }} >
                  <Label value="Application Name" position="bottom" offset={15} className="fill-slate-500 text-xs"/>
@@ -132,7 +153,8 @@ export default function OverviewPage() {
                  <Label value="Total Requests" angle={-90} position="left" offset={-5} className="fill-slate-500 text-xs"/>
               </YAxis>
               <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }} cursor={{ fill: '#1e293b' }} />
-              <Bar dataKey="requests" name="Requests" radius={[4, 4, 0, 0]}><Cell fill="#3b82f6" /></Bar>
+              {/* FIX: Moved fill color directly to the Bar component instead of using a single Cell */}
+              <Bar dataKey="requests" name="Requests" radius={[4, 4, 0, 0]} fill="#3b82f6" />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -140,16 +162,20 @@ export default function OverviewPage() {
           <SectionHeader icon={<AlertTriangle className="w-4 h-4 text-red-400" />} title="Top Risk Applications by Cumulative Anomaly Score" subtitle="Applications ranked by their cumulative anomaly score" tooltipText="Higher scores indicate more suspicious behavior. Scores above 80 warrant investigation." />
           {riskData.length > 0 ? (
             <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={riskData} layout="vertical" margin={{ top: 5, right: 20, left: 40, bottom: 20 }}>
+              {/* FIX: Increased left margin to 80 to prevent labels from being cut off */}
+              <BarChart data={riskData} layout="vertical" margin={{ top: 5, right: 20, left: 80, bottom: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
                 <XAxis type="number" stroke="#475569" tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#334155' }}>
                   <Label value="Cumulative Anomaly Score" position="bottom" offset={15} className="fill-slate-500 text-xs"/>
                 </XAxis>
-                <YAxis dataKey="name" type="category" width={100} stroke="#475569" tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false} axisLine={false} >
-                  <Label value="Application Name" angle={-90} position="left" offset={-30} className="fill-slate-500 text-xs"/>
+                {/* FIX: Increased YAxis width to 130 and adjusted label offset */}
+                <YAxis dataKey="name" type="category" width={130} stroke="#475569" tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false} axisLine={false} >
+                  <Label value="Application Name" angle={-90} position="left" offset={-60} className="fill-slate-500 text-xs"/>
                 </YAxis>
                 <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155'}} cursor={{ fill: '#1e293b' }} />
-                <Bar dataKey="anomalies" name="Anomaly Score" radius={[0, 4, 4, 0]}>{riskData.map((_, idx) => <Cell key={idx} fill={idx === 0 ? '#ef4444' : idx === 1 ? '#f97316' : '#eab308'} />)}</Bar>
+                <Bar dataKey="anomalies" name="Anomaly Score" radius={[0, 4, 4, 0]}>
+                  {riskData.map((_, idx) => <Cell key={idx} fill={idx === 0 ? '#ef4444' : idx === 1 ? '#f97316' : '#eab308'} />)}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           ) : <div className="flex items-center justify-center h-full text-slate-500"><CheckCircle className="w-4 h-4 text-emerald-500 mr-2" />No anomalies detected from telemetry streams.</div>}
