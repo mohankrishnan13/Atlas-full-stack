@@ -1,10 +1,12 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { Bell, LogOut, ShieldCheck, User } from 'lucide-react';
+import { usePathname, useRouter } from 'next/navigation';
+import { Bell, LogOut } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { useEnvironment } from '@/context/EnvironmentContext';
+import { apiGet } from '@/lib/api';
+import type { HeaderData } from '@/lib/types';
 import {
   Select,
   SelectContent,
@@ -12,15 +14,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Button } from '@/components/ui/button';
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from '@/components/ui/sheet';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,199 +22,143 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from '@/components/ui/sheet';
 import { cn, getSeverityClassNames } from '@/lib/utils';
-import { Badge } from '../ui/badge';
-import type { RecentAlert, User as UserType, Application } from '@/lib/types';
-import { Skeleton } from '../ui/skeleton';
-import { useToast } from '@/hooks/use-toast';
-import { useEnvironment } from '@/context/EnvironmentContext';
-import { apiGet } from '@/lib/api';
 
-function AlertItem({ alert }: { alert: RecentAlert }) {
-  const severityClasses = getSeverityClassNames(alert.severity);
-  return (
-    <div className="flex items-start gap-3 p-4 border-b border-border last:border-b-0 hover:bg-muted/50">
-      <div
-        className={cn(
-          'mt-1 h-2.5 w-2.5 rounded-full',
-          severityClasses.bg.replace('bg-', '')
-        )}
-      />
-      <div className="flex-1">
-        <div className="flex justify-between items-center">
-          <p className="font-semibold">{alert.app}</p>
-          <p className="text-xs text-muted-foreground">{alert.timestamp}</p>
-        </div>
-        <p className="text-sm text-muted-foreground">{alert.message}</p>
-        <Badge variant="outline" className={cn('mt-2', severityClasses.badge)}>
-          {alert.severity}
-        </Badge>
-      </div>
-    </div>
-  );
-}
-
-type HeaderData = {
-  user: UserType;
-  recentAlerts: RecentAlert[];
-  applications: Application[];
+const PAGE_TITLES: Record<string, string> = {
+  '/overview': 'Overview',
+  '/api-monitoring': 'API Monitoring',
+  '/network-traffic': 'Network Traffic',
+  '/endpoint-security': 'Endpoint Security',
+  '/database-monitoring': 'Database Monitoring',
+  '/incidents': 'Case Management',
+  '/reports': 'Reports',
+  '/settings': 'Settings',
 };
 
 export function DashboardHeader() {
-  const [data, setData] = useState<HeaderData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const { toast } = useToast();
-  const { environment, setEnvironment } = useEnvironment();
-  const { user: authUser } = useAuth();
+  const pathname = usePathname();
   const router = useRouter();
+  const { logout } = useAuth();
+  const { environment, setEnvironment } = useEnvironment();
+  const [headerData, setHeaderData] = useState<HeaderData | null>(null);
+  const [alertsOpen, setAlertsOpen] = useState(false);
+
+  const pageTitle =
+    Object.entries(PAGE_TITLES).find(([key]) => pathname.startsWith(key))?.[1] ??
+    'Dashboard';
 
   useEffect(() => {
-    let cancelled = false;
-    setIsLoading(true);
     apiGet<HeaderData>(`/header-data?env=${environment}`)
-      .then((result) => { if (!cancelled) setData(result); })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          toast({ variant: 'destructive', title: 'Failed to Load Header Data', description: err instanceof Error ? err.message : 'Request failed.' });
-          setData(null);
-        }
-      })
-      .finally(() => { if (!cancelled) setIsLoading(false); });
-    return () => { cancelled = true; };
-  }, [toast, environment]);
+      .then(setHeaderData)
+      .catch(() => {});
+  }, [environment]);
 
   const handleLogout = () => {
-    // In a real app, you would also clear auth tokens here
-    if (typeof window !== 'undefined') {
-        localStorage.removeItem('atlas_auth_token');
-    }
-    router.push('/login');
+    logout();
+    router.replace('/login');
   };
 
+  const userInitials = headerData?.user?.name
+    ? headerData.user.name
+        .split(' ')
+        .map((n) => n[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase()
+    : 'JD';
+
+  const hasAlerts = (headerData?.recentAlerts?.length ?? 0) > 0;
+
   return (
-    <header className="sticky top-0 z-30 hidden h-16 items-center justify-between border-b border-slate-800 bg-background px-4 text-slate-200 md:flex md:px-6">
-      {/* Left Side: Branding */}
-      <div className="flex items-center gap-2">
-        <ShieldCheck className="h-7 w-7 text-primary" />
-        <div className="flex items-center text-lg font-semibold tracking-wide">
-          <span className="text-white">ATLAS</span>
-          <span className="mx-2 text-slate-600">|</span>
-          <span className="text-slate-400 hidden lg:inline-block font-normal text-sm">
-            Advanced Traffic Layer Anomaly System
-          </span>
-        </div>
+    <header className="h-16 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-6 flex-shrink-0">
+      <div className="flex items-center gap-6">
+        <h1 className="text-base font-medium text-slate-50">{pageTitle}</h1>
       </div>
 
-      {/* Right Side: Controls & Profile */}
       <div className="flex items-center gap-4">
-        {/* Global Environment Switcher */}
+        {/* Environment Selector */}
         <Select
           value={environment}
-          onValueChange={(value) => setEnvironment(value as 'cloud' | 'local')}
+          onValueChange={(v) => setEnvironment(v as 'cloud' | 'local')}
         >
-          <SelectTrigger className="w-[120px] bg-card border-slate-700 focus:ring-slate-500">
-            <SelectValue placeholder="Environment" />
+          <SelectTrigger className="w-[120px] bg-slate-950 border-slate-800 text-slate-200 h-9 text-sm">
+            <SelectValue />
           </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="cloud">Cloud</SelectItem>
-            <SelectItem value="local">Local</SelectItem>
+          <SelectContent className="bg-slate-900 border-slate-700">
+            <SelectItem value="local" className="text-slate-200 focus:bg-slate-800">Local</SelectItem>
+            <SelectItem value="cloud" className="text-slate-200 focus:bg-slate-800">Cloud</SelectItem>
           </SelectContent>
         </Select>
 
         {/* Notifications */}
-        <Sheet>
+        <Sheet open={alertsOpen} onOpenChange={setAlertsOpen}>
           <SheetTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="relative text-slate-400 hover:text-white"
-            >
-              <Bell className="h-5 w-5" />
-              {(data?.recentAlerts?.length ?? 0) > 0 && (
-                <span className="absolute top-1 right-1 flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
-                </span>
+            <button className="relative p-2 hover:bg-slate-800 rounded-lg transition-colors">
+              <Bell className="w-5 h-5 text-slate-400" />
+              {hasAlerts && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" />
               )}
-            </Button>
+            </button>
           </SheetTrigger>
-          <SheetContent className="w-[400px] sm:w-[540px] p-0">
-            <SheetHeader className="p-4 border-b border-border">
-              <SheetTitle>Recent Alerts</SheetTitle>
+          <SheetContent className="bg-slate-900 border-slate-700 text-slate-200 w-[380px]">
+            <SheetHeader className="border-b border-slate-800 pb-4">
+              <SheetTitle className="text-slate-50">Recent Alerts</SheetTitle>
             </SheetHeader>
-            <div className="h-[calc(100vh-4.5rem)] overflow-y-auto">
-              {isLoading && (
-                <div className="p-4 text-center text-muted-foreground">
-                  Loading alerts...
-                </div>
+            <div className="mt-4 space-y-1">
+              {headerData?.recentAlerts?.length ? (
+                headerData.recentAlerts.map((alert) => {
+                  const sc = getSeverityClassNames(alert.severity);
+                  return (
+                    <div
+                      key={alert.id}
+                      className="flex items-start gap-3 p-3 rounded-lg hover:bg-slate-800 transition-colors"
+                    >
+                      <div className={cn('mt-1.5 h-2 w-2 rounded-full flex-shrink-0', sc.bg)} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex justify-between items-center gap-2">
+                          <p className="font-medium text-sm text-slate-200 truncate">{alert.app}</p>
+                          <p className="text-xs text-slate-500 flex-shrink-0">{alert.timestamp}</p>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-0.5">{alert.message}</p>
+                        <span className={cn('inline-block mt-1 text-xs px-1.5 py-0.5 rounded border', sc.badge)}>
+                          {alert.severity}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="text-sm text-slate-500 text-center py-8">No recent alerts</p>
               )}
-              {!isLoading && (!data || data.recentAlerts.length === 0) && (
-                <div className="p-4 text-center text-muted-foreground">
-                  No recent alerts.
-                </div>
-              )}
-              {data?.recentAlerts.map((alert) => (
-                <AlertItem key={alert.id} alert={alert} />
-              ))}
             </div>
           </SheetContent>
         </Sheet>
 
-        {/* Vertical Divider */}
-        <div className="h-6 w-px bg-slate-800"></div>
-
-        {/* User Profile Dropdown — prefer Auth context (logged-in user) over header-data */}
+        {/* User Avatar + Logout */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              className="relative h-10 w-10 rounded-full"
-            >
-              {!authUser && (isLoading || !data?.user) ? (
-                <Skeleton className="h-10 w-10 rounded-full" />
-              ) : (
-                <Avatar className="h-10 w-10">
-                  <AvatarImage
-                    src={authUser?.avatar ?? data?.user?.avatar ?? ''}
-                    alt={authUser?.name ?? data?.user?.name}
-                    data-ai-hint="person face"
-                  />
-                  <AvatarFallback>
-                    {(authUser?.name ?? data?.user?.name ?? 'U')
-                      .split(' ')
-                      .map((n) => n[0])
-                      .join('')
-                      .toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
-              )}
-            </Button>
+            <button className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center text-xs font-semibold text-slate-300 hover:ring-2 hover:ring-blue-500/50 transition-all">
+              {userInitials}
+            </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent className="w-56" align="end" forceMount>
-            <DropdownMenuLabel className="font-normal">
-              <div className="flex flex-col space-y-1">
-                <p className="text-sm font-medium leading-none">
-                  {authUser?.name ?? data?.user?.name ?? 'User'}
-                </p>
-                <p className="text-xs leading-none text-muted-foreground">
-                  {authUser?.email ?? data?.user?.email ?? ''}
-                </p>
-              </div>
+          <DropdownMenuContent align="end" className="bg-slate-900 border-slate-700 text-slate-200 w-48">
+            <DropdownMenuLabel className="text-slate-400 text-xs">
+              {headerData?.user?.email ?? 'Analyst'}
             </DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <Link href="/profile">
-                <User className="mr-2 h-4 w-4" />
-                <span>Profile</span>
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
+            <DropdownMenuSeparator className="bg-slate-800" />
             <DropdownMenuItem
               onClick={handleLogout}
-              className="focus:bg-destructive/20 focus:text-red-400"
+              className="text-red-400 focus:bg-slate-800 focus:text-red-400 cursor-pointer"
             >
-              <LogOut className="mr-2 h-4 w-4" />
-              <span>Log out</span>
+              <LogOut className="w-4 h-4 mr-2" />
+              Logout
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

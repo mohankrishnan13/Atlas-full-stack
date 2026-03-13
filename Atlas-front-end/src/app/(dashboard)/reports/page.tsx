@@ -1,184 +1,184 @@
 "use client";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Calendar as CalendarIcon, Bot, FileText, Download } from "lucide-react";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Calendar } from "@/components/ui/calendar";
-import { DateRange } from "react-day-picker";
-import { format } from "date-fns";
-import { addDays } from "date-fns";
-import React from "react";
-import { useToast } from "@/hooks/use-toast";
+import React, { useEffect, useState } from "react";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription
+} from "../../../components/ui/card";
+import { Button } from "../../../components/ui/button";
+import { Input } from "../../../components/ui/input";
+import { Label } from "../../../components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../../components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../../../components/ui/table";
+import { apiGet, apiPost, ApiError } from "../../../lib/api";
+import { HeaderData, Application } from "../../../lib/types";
+import { toast } from "sonner";
+import { Alert, AlertDescription, AlertTitle } from "../../../components/ui/alert";
+import { Terminal, Download, Calendar, Activity, FileText, Settings, LoaderCircle } from "lucide-react";
+
+type ScheduledReportRow = {
+  id: number;
+  title: string;
+  description: string;
+  schedule: string;
+  active: boolean;
+  configureLabel: string;
+};
+
+type RecentDownloadRow = {
+  id: number;
+  fileName: string;
+  targetAppScope: string;
+  generated: string;
+  size: string;
+  downloadUrl: string;
+};
+
+type ReportsOverviewResponse = {
+  scheduledReports: ScheduledReportRow[];
+  recentDownloads: RecentDownloadRow[];
+};
 
 export default function ReportsPage() {
-    const { toast } = useToast();
-    const [date, setDate] = React.useState<DateRange | undefined>({
-        from: new Date(2024, 4, 20),
-        to: addDays(new Date(2024, 4, 20), 7),
-    });
+  const [applications, setApplications] = useState<Application[]>([]);
+  const [selectedApp, setSelectedApp] = useState<string>("");
+  const [reportType, setReportType] = useState<string>("pdf");
+  const [overview, setOverview] = useState<ReportsOverviewResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [isGenerating, setIsGenerating] = useState(false);
 
-    const handleGenerate = () => {
-        toast({
-            title: "Report Generation Started",
-            description: "Your report is being generated and will appear in recent downloads shortly.",
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [header, overviewData] = await Promise.all([
+          apiGet<HeaderData>("/header-data"),
+          apiGet<ReportsOverviewResponse>("/reports/overview")
+        ]);
+        setApplications(header.applications);
+        if (header.applications.length > 0) {
+          setSelectedApp(header.applications[0].id);
+        }
+        setOverview(overviewData);
+      } catch (err) {
+        toast.error("Failed to load reports data.", {
+          description: err instanceof ApiError ? err.message : "Request failed.",
         });
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
+
+  const handleGenerateReport = async () => {
+    if (!selectedApp || !reportType) {
+      toast.error("Please select an application and export format.");
+      return;
     }
+    setIsGenerating(true);
+    try {
+      const resp = await apiPost<{ download?: RecentDownloadRow }>("/reports/generate", {
+        dataSource: selectedApp,
+        template: "General Security Summary",
+        exportFormat: reportType.toLowerCase(),
+      });
+      toast.success("Report Generated Successfully");
+      if (resp.download) {
+        setOverview(prev => prev ? { ...prev, recentDownloads: [resp.download!, ...prev.recentDownloads] } : null);
+      }
+    } catch (err) {
+      toast.error("Failed to generate report.", {
+        description: err instanceof ApiError ? err.message : "An unexpected error occurred.",
+      });
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
-    return (
-        <div className="space-y-8">
-            <h1 className="text-3xl font-bold">Reports</h1>
+  if (loading) {
+    return <div className="p-6 text-slate-400"><LoaderCircle className="w-5 h-5 animate-spin inline-block mr-2" />Loading report data...</div>;
+  }
 
-            <Card>
-                <CardHeader>
-                    <CardTitle>Generate New Report</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                        <div className="space-y-2">
-                            <Label htmlFor="date-range">Date Range</Label>
-                             <Popover>
-                                <PopoverTrigger asChild>
-                                <Button
-                                    id="date"
-                                    variant={"outline"}
-                                    className="w-full justify-start text-left font-normal"
-                                >
-                                    <CalendarIcon className="mr-2 h-4 w-4" />
-                                    {date?.from ? (
-                                    date.to ? (
-                                        <>
-                                        {format(date.from, "LLL dd, y")} -{" "}
-                                        {format(date.to, "LLL dd, y")}
-                                        </>
-                                    ) : (
-                                        format(date.from, "LLL dd, y")
-                                    )
-                                    ) : (
-                                    <span>Pick a date</span>
-                                    )}
-                                </Button>
-                                </PopoverTrigger>
-                                <PopoverContent className="w-auto p-0" align="start">
-                                <Calendar
-                                    initialFocus
-                                    mode="range"
-                                    defaultMonth={date?.from}
-                                    selected={date}
-                                    onSelect={setDate}
-                                    numberOfMonths={2}
-                                />
-                                </PopoverContent>
-                            </Popover>
-                        </div>
-                        <div className="space-y-2">
-                            <Label htmlFor="data-source">Data Source</Label>
-                            <Select>
-                                <SelectTrigger id="data-source"><SelectValue placeholder="Select source" /></SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="incidents">Incidents</SelectItem>
-                                    <SelectItem value="api">API Monitoring</SelectItem>
-                                    <SelectItem value="network">Network Traffic</SelectItem>
-                                    <SelectItem value="endpoints">Endpoint Security</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-2">
-                             <Label htmlFor="export-format">Export Format</Label>
-                            <Select>
-                                <SelectTrigger id="export-format"><SelectValue placeholder="Select format" /></SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="pdf">PDF</SelectItem>
-                                    <SelectItem value="csv">CSV</SelectItem>
-                                    <SelectItem value="json">JSON</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-                         <div className="flex items-end">
-                            <Button className="w-full" onClick={handleGenerate}>Generate</Button>
-                        </div>
-                    </div>
-                     <div className="space-y-2">
-                        <Label htmlFor="ai-report">Ask AI to generate a report...</Label>
-                         <div className="relative">
-                            <Bot className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
-                            <Input id="ai-report" placeholder="e.g., 'a summary of all critical incidents this week related to the payment-service'" className="pl-10" />
-                        </div>
-                    </div>
-                </CardContent>
-            </Card>
+  return (
+    <div className="space-y-8 p-4 md:p-6 pb-8">
+      <header>
+        <h1 className="text-2xl font-bold text-slate-100 flex items-center gap-2"><FileText className="w-6 h-6 text-blue-400" />Reports & Downloads</h1>
+        <p className="text-sm text-slate-500 mt-1 ml-8">Generate, schedule, and download security reports.</p>
+      </header>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                 <Card>
-                    <CardHeader>
-                        <CardTitle>Scheduled Reports</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                        <div className="flex items-center justify-between p-4 bg-muted rounded-lg">
-                            <div>
-                                <h4 className="font-semibold">Weekly SOC Summary</h4>
-                                <p className="text-sm text-muted-foreground">Every Monday at 9:00 AM</p>
-                            </div>
-                            <Switch defaultChecked />
-                        </div>
-                         <div className="flex items-center justify-between p-4 bg-muted rounded-lg">
-                            <div>
-                                <h4 className="font-semibold">Daily Endpoint Health</h4>
-                                <p className="text-sm text-muted-foreground">Daily at 8:00 AM</p>
-                            </div>
-                            <Switch defaultChecked />
-                        </div>
-                         <div className="flex items-center justify-between p-4 bg-muted rounded-lg">
-                            <div>
-                                <h4 className="font-semibold">Monthly Compliance Report</h4>
-                                <p className="text-sm text-muted-foreground">1st of every month</p>
-                            </div>
-                            <Switch />
-                        </div>
-                    </CardContent>
-                </Card>
-                 <Card>
-                    <CardHeader>
-                        <CardTitle>Recent Downloads</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-2">
-                         <div className="flex items-center justify-between p-3 hover:bg-muted rounded-lg">
-                            <div className="flex items-center gap-3">
-                               <FileText className="h-5 w-5 text-muted-foreground"/>
-                               <div>
-                                    <h4 className="font-semibold">incidents_2024-05-20.pdf</h4>
-                                    <p className="text-sm text-muted-foreground">Generated 1 day ago</p>
-                               </div>
-                            </div>
-                            <Button variant="ghost" size="icon"><Download className="h-5 w-5" /></Button>
-                        </div>
-                        <div className="flex items-center justify-between p-3 hover:bg-muted rounded-lg">
-                            <div className="flex items-center gap-3">
-                               <FileText className="h-5 w-5 text-muted-foreground"/>
-                               <div>
-                                    <h4 className="font-semibold">api_traffic_q1_2024.csv</h4>
-                                    <p className="text-sm text-muted-foreground">Generated 3 days ago</p>
-                               </div>
-                            </div>
-                            <Button variant="ghost" size="icon"><Download className="h-5 w-5" /></Button>
-                        </div>
-                         <div className="flex items-center justify-between p-3 hover:bg-muted rounded-lg">
-                            <div className="flex items-center gap-3">
-                               <FileText className="h-5 w-5 text-muted-foreground"/>
-                               <div>
-                                    <h4 className="font-semibold">endpoint_health_weekly.pdf</h4>
-                                    <p className="text-sm text-muted-foreground">Generated 5 days ago</p>
-                               </div>
-                            </div>
-                            <Button variant="ghost" size="icon"><Download className="h-5 w-5" /></Button>
-                        </div>
-                    </CardContent>
-                </Card>
-            </div>
-        </div>
-    );
+      <Card className="bg-slate-900 border-slate-800">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-slate-200"><Download className="w-5 h-5" />Generate New Report</CardTitle>
+          <CardDescription>Customize and generate a one-time security report for a specific application.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap gap-4 items-end">
+            <div className="flex-grow min-w-[200px]"><Label className="text-xs text-slate-400">Data Source</Label><Select value={selectedApp} onValueChange={setSelectedApp}><SelectTrigger className="bg-slate-950 border-slate-700"><SelectValue placeholder="Select Application" /></SelectTrigger><SelectContent>{applications.map(app => <SelectItem key={app.id} value={app.id}>{app.name}</SelectItem>)}</SelectContent></Select></div>
+            <div className="flex-grow min-w-[150px]"><Label className="text-xs text-slate-400">Export Format</Label><Select value={reportType} onValueChange={setReportType}><SelectTrigger className="bg-slate-950 border-slate-700"><SelectValue placeholder="PDF" /></SelectTrigger><SelectContent><SelectItem value="pdf">PDF</SelectItem><SelectItem value="csv">CSV</SelectItem></SelectContent></Select></div>
+            <Button onClick={handleGenerateReport} disabled={isGenerating} className="flex-grow md:flex-grow-0 bg-blue-600 hover:bg-blue-700 text-white">
+              {isGenerating ? <><LoaderCircle className="mr-2 h-4 w-4 animate-spin" />Generating...</> : 'Generate Report'}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card className="bg-slate-900 border-slate-800">
+          <CardHeader><CardTitle className="flex items-center gap-2"><Calendar className="w-5 h-5 text-slate-400" />Scheduled Reports</CardTitle></CardHeader>
+          <CardContent>
+            <ul className="space-y-3">
+              {(overview?.scheduledReports || []).map(r => (
+                <li key={r.id} className="flex items-center justify-between p-3 bg-slate-950/50 rounded-lg border border-slate-800">
+                  <div>
+                    <p className="font-semibold text-slate-200">{r.title}</p>
+                    <p className="text-xs text-slate-500">{r.schedule}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${r.active ? 'bg-green-500/10 text-green-400' : 'bg-slate-700 text-slate-400'}`}>{r.active ? 'Active' : 'Paused'}</span>
+                    <Button variant="outline" size="sm" className="border-slate-700 hover:bg-slate-800">Configure</Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-slate-900 border-slate-800">
+          <CardHeader><CardTitle className="flex items-center gap-2"><Activity className="w-5 h-5 text-slate-400"/>Recent Downloads</CardTitle></CardHeader>
+          <CardContent>
+             <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader><TableRow className="border-slate-800"><TableHead>File</TableHead><TableHead>Size</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {(overview?.recentDownloads || []).slice(0, 5).map(d => (
+                      <TableRow key={d.id} className="border-slate-800">
+                        <TableCell><p className="font-medium text-slate-300">{d.fileName}</p><p className="text-xs text-blue-400">{d.targetAppScope}</p></TableCell>
+                        <TableCell className="text-xs text-slate-500">{d.size}</TableCell>
+                        <TableCell className="text-right"><Button variant="ghost" size="sm" onClick={() => window.open(d.downloadUrl, '_blank')} className="text-emerald-400 hover:text-emerald-300">Download</Button></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
 }

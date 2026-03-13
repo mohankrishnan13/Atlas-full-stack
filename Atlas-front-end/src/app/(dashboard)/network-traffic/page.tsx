@@ -1,222 +1,177 @@
-"use client";
+'use client';
 
-import { useState, useEffect, useMemo } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Gauge, Users, XCircle, ShieldBan, LoaderCircle } from "lucide-react";
-import { Skeleton } from "@/components/ui/skeleton";
-import { ChartContainer, ChartTooltipContent } from "@/components/ui/chart";
-import { BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import type { NetworkTrafficData, NetworkAnomaly } from "@/lib/types";
-import { useToast } from "@/hooks/use-toast";
-import { useEnvironment } from "@/context/EnvironmentContext";
-import { apiGet, apiPost, ApiError } from "@/lib/api";
+import React, { useEffect, useState, useMemo } from 'react';
+import {
+  Activity, ShieldAlert, Wifi, AlertTriangle, Info, LoaderCircle, Network, Globe, Server, Ban, Zap
+} from 'lucide-react';
+import { apiGet, apiPost, ApiError } from '@/lib/api';
+import { useEnvironment } from '@/context/EnvironmentContext';
+import { toast } from 'sonner';
+import type { NetworkTrafficData, NetworkAnomaly } from '@/lib/types';
 
-function StatCard({ title, value, icon: Icon, isLoading }: { title: string, value?: string | number, icon: React.ElementType, isLoading: boolean }) {
-    return (
-        <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">{title}</CardTitle>
-                <Icon className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-                {isLoading ? <Skeleton className="h-8 w-24" /> : <div className="text-2xl font-bold">{value}</div>}
-            </CardContent>
-        </Card>
-    )
-}
-
-function BandwidthGauge({ bandwidth, isLoading }: { bandwidth?: number, isLoading: boolean }) {
-    return (
-        <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Bandwidth</CardTitle>
-                <Gauge className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-                {isLoading ? (
-                    <div className="space-y-2">
-                        <Skeleton className="h-8 w-16" />
-                        <Skeleton className="h-4 w-full" />
-                    </div>
-                ) : (
-                    <>
-                        <div className="text-2xl font-bold mb-2">{bandwidth}%</div>
-                        <Progress value={bandwidth} />
-                    </>
-                )}
-            </CardContent>
-        </Card>
-    )
-}
-
-const anomalyChartConfig = { count: { label: "Anomalies", color: "hsl(var(--chart-2))" } };
-
-/** Categorical: anomalies by target app (from live data). */
-function AnomaliesByAppChart({ anomalies, isLoading }: { anomalies?: NetworkAnomaly[]; isLoading: boolean }) {
-  const byApp = useMemo(() => {
-    if (!anomalies?.length) return [];
-    const map = new Map<string, number>();
-    anomalies.forEach((a) => map.set(a.app, (map.get(a.app) ?? 0) + 1));
-    return Array.from(map.entries()).map(([app, count]) => ({ app, count })).sort((a, b) => b.count - a.count).slice(0, 12);
-  }, [anomalies]);
+// --- Enhanced Reusable Components ---
+const InfoTooltip = React.memo(({ text }: { text: string }) => {
+  const [open, setOpen] = useState(false);
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Network Anomalies by Target Application</CardTitle>
-      </CardHeader>
-      <CardContent className="h-[300px]">
-        {isLoading ? <Skeleton className="h-full w-full" /> : !byApp.length ? (
-          <div className="h-full flex items-center justify-center text-muted-foreground">No anomaly data by app.</div>
-        ) : (
-          <ChartContainer config={anomalyChartConfig} className="h-full w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={byApp} margin={{ top: 5, right: 20, left: -10, bottom: 5 }} layout="vertical" barCategoryGap="12%">
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="hsl(var(--border) / 0.5)" />
-                <XAxis type="number" tick={{ fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} />
-                <YAxis type="category" dataKey="app" width={100} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }} tickLine={false} axisLine={false} />
-                <Tooltip content={<ChartTooltipContent hideLabel />} cursor={{ fill: "hsl(var(--muted))" }} />
-                <Bar dataKey="count" fill="var(--color-count)" radius={[0, 4, 4, 0]} name="Anomalies" />
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartContainer>
-        )}
-      </CardContent>
-    </Card>
+      <div className="relative inline-flex items-center ml-1">
+          <button onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} className="text-slate-500 hover:text-blue-400 transition-colors" aria-label="More information">
+              <Info className="w-3.5 h-3.5" />
+          </button>
+          {open && <div className="absolute z-50 left-5 top-0 w-72 bg-slate-800 border border-slate-600 rounded-lg p-3 shadow-xl text-xs text-slate-300 leading-relaxed">{text}</div>}
+      </div>
   );
-}
+});
+InfoTooltip.displayName = 'InfoTooltip';
 
-/** Categorical: anomalies by source IP. */
-function AnomaliesBySourceIpChart({ anomalies, isLoading }: { anomalies?: NetworkAnomaly[]; isLoading: boolean }) {
-  const byIp = useMemo(() => {
-    if (!anomalies?.length) return [];
-    const map = new Map<string, number>();
-    anomalies.forEach((a) => map.set(a.sourceIp, (map.get(a.sourceIp) ?? 0) + 1));
-    return Array.from(map.entries()).map(([sourceIp, count]) => ({ sourceIp, count })).sort((a, b) => b.count - a.count).slice(0, 10);
-  }, [anomalies]);
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Network Anomalies by Source IP</CardTitle>
-      </CardHeader>
-      <CardContent className="h-[300px]">
-        {isLoading ? <Skeleton className="h-full w-full" /> : !byIp.length ? (
-          <div className="h-full flex items-center justify-center text-muted-foreground">No anomaly data.</div>
-        ) : (
-          <ChartContainer config={anomalyChartConfig} className="h-full w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={byIp} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border) / 0.5)" />
-                <XAxis dataKey="sourceIp" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} />
-                <Tooltip content={<ChartTooltipContent hideLabel />} cursor={{ fill: "hsl(var(--muted))" }} />
-                <Bar dataKey="count" fill="var(--color-count)" radius={[4, 4, 0, 0]} name="Anomalies" />
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartContainer>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
+const SectionHeader = React.memo(({ icon, title, subtitle, tooltip, right }: { icon: React.ReactNode; title: string; subtitle: string; tooltip: string; right?: React.ReactNode; }) => (
+    <div className="mb-5">
+        <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">{icon}<h2 className="text-sm font-semibold text-slate-100">{title}</h2><InfoTooltip text={tooltip} /></div>
+            {right}
+        </div>
+        <p className="text-[11px] text-slate-500 mt-1 pl-6 leading-relaxed">{subtitle}</p>
+    </div>
+));
+SectionHeader.displayName = 'SectionHeader';
 
+const KpiCard = React.memo(({ value, label, subtitle, color = 'default' }: { value: string | number; label: string; subtitle: string; color?: 'default' | 'red' | 'green' | 'orange'; }) => {
+    const colors = { default: 'text-slate-200', red: 'text-red-400', green: 'text-emerald-400', orange: 'text-orange-400' };
+    return (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+            <h3 className="text-sm font-semibold text-slate-400 mb-2">{label}</h3>
+            <div className={`text-3xl font-bold ${colors[color]}`}>{value}</div>
+            <p className="text-xs text-slate-500 mt-1">{subtitle}</p>
+        </div>
+    );
+});
+KpiCard.displayName = 'KpiCard';
+
+const AnomalyRow = ({ row, onBlockIp }: { row: NetworkAnomaly; onBlockIp: (sourceIp: string, app: string) => void; }) => {
+    const safeRow = row || {};
+    return (
+        <tr className="hover:bg-slate-800/30 transition-colors">
+            <td className="px-5 py-4"><div className="text-slate-100 font-mono text-xs font-semibold">{safeRow.sourceIp || 'N/A'}</div></td>
+            <td className="px-5 py-4"><span className="text-blue-400 text-xs font-semibold">{safeRow.app || 'N/A'}</span></td>
+            <td className="px-5 py-4"><span className="text-slate-400 font-mono text-xs">{safeRow.port?.toString() || 'N/A'}</span></td>
+            <td className="px-5 py-4"><div className="flex items-center gap-2"><AlertTriangle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" /><span className="text-slate-300 text-xs">{safeRow.type || 'Unknown Anomaly'}</span></div></td>
+            <td className="px-5 py-4 text-right"><button onClick={() => onBlockIp(safeRow.sourceIp || '', safeRow.app || '')} className="bg-red-600 hover:bg-red-700 text-white text-xs font-semibold px-3 py-1.5 rounded transition-colors">Block Source</button></td>
+        </tr>
+    )
+};
+
+
+// --- Main Page Component ---
 export default function NetworkTrafficPage() {
   const [data, setData] = useState<NetworkTrafficData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [blockingKey, setBlockingKey] = useState<string | null>(null);
-  const { toast } = useToast();
+  const [loading, setLoading] = useState(true);
   const { environment } = useEnvironment();
 
   useEffect(() => {
-    let cancelled = false;
-    setIsLoading(true);
-    apiGet<NetworkTrafficData>(`/network-traffic?env=${environment}`)
-      .then((result) => { if (!cancelled) setData(result); })
-      .catch((err: ApiError) => {
-        if (!cancelled) {
-          toast({ variant: "destructive", title: "Failed to Load Network Traffic Data", description: err.message });
-          setData(null);
-        }
-      })
-      .finally(() => { if (!cancelled) setIsLoading(false); });
-    return () => { cancelled = true; };
-  }, [toast, environment]);
+    setLoading(true);
+    apiGet<NetworkTrafficData>(`/network-traffic`).then(setData).catch(err => toast.error('Failed to load network data.', { description: err instanceof ApiError ? err.message : 'Request failed.' })).finally(() => setLoading(false));
+  }, [environment]);
 
-  const handleApplyHardBlock = async (anomaly: NetworkAnomaly) => {
-    const key = `${anomaly.sourceIp}-${anomaly.app}`;
-    setBlockingKey(key);
+  const handleBlockIp = async (sourceIp: string, app: string) => {
+    if (!sourceIp) {
+        toast.error('Cannot block an empty IP address.');
+        return;
+    }
     try {
-      await apiPost<{ success: boolean; message: string }>("/network-traffic/block", { sourceIp: anomaly.sourceIp, app: anomaly.app });
-      toast({ title: "Hard Block Applied", description: `Block applied for source ${anomaly.sourceIp} (app: ${anomaly.app}).` });
-    } catch (err: unknown) {
-      toast({ variant: "destructive", title: "Block Failed", description: err instanceof Error ? err.message : "Apply hard block failed." });
-    } finally {
-      setBlockingKey(null);
+      await apiPost('/network-traffic/block', { sourceIp, app });
+      toast.success('Network Block Applied', { description: `Hard block applied for ${sourceIp} → ${app}.` });
+    } catch (err) {
+      toast.error('Block action failed.', { description: err instanceof ApiError ? err.message : 'Request failed.' });
     }
   };
 
+  const {
+    safeBandwidth, safeActiveConnections, safeDroppedPackets, safeAnomalies
+  } = useMemo(() => {
+    const netData = data || {};
+    
+    // Defensive parsing with null checks and type coercion
+    const anomalies = Array.isArray(netData.networkAnomalies) 
+      ? netData.networkAnomalies
+          .filter(item => item && typeof item === 'object')
+          .map(item => ({
+            id: Number(item?.id) || 0,
+            sourceIp: String(item?.sourceIp || 'N/A'),
+            destIp: String(item?.destIp || 'N/A'),
+            app: String(item?.app || 'N/A'),
+            port: Number(item?.port) || 0,
+            type: String(item?.type || 'Unknown Anomaly')
+          }))
+          .filter(item => item.sourceIp !== 'N/A')
+      : [];
+
+    return {
+        safeBandwidth: Number(netData.bandwidth) || 0,
+        safeActiveConnections: Number(netData.activeConnections) || 0,
+        safeDroppedPackets: Number(netData.droppedPackets) || 0,
+        safeAnomalies: anomalies
+    };
+  }, [data]);
+
+  if (loading) return <div className="p-6 flex justify-center"><LoaderCircle className="w-6 h-6 animate-spin text-slate-500" /></div>;
+  if (!data) return <div className="flex items-center justify-center h-48 text-slate-500">No network traffic data available.</div>;
+  
+  const droppedPct = safeActiveConnections > 0 ? ((safeDroppedPackets / (safeActiveConnections + safeDroppedPackets)) * 100).toFixed(1) : '0.0';
+
   return (
-    <div className="space-y-8">
-      <h1 className="text-3xl font-bold">Network Traffic</h1>
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <BandwidthGauge bandwidth={data?.bandwidth} isLoading={isLoading} />
-        <StatCard title="Active Connections" value={data?.activeConnections?.toLocaleString()} icon={Users} isLoading={isLoading} />
-        <StatCard title="Dropped Packets" value={data?.droppedPackets?.toLocaleString()} icon={XCircle} isLoading={isLoading} />
+    <div className="space-y-6 pb-8">
+      <div>
+        <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2"><Network className="w-5 h-5 text-blue-400" />Network Traffic Analysis</h1>
+        <p className="text-xs text-slate-500 mt-0.5 ml-7">Real-time network flow monitoring, bandwidth consumption, and anomaly detection.</p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <AnomaliesByAppChart anomalies={data?.networkAnomalies} isLoading={isLoading} />
-        <AnomaliesBySourceIpChart anomalies={data?.networkAnomalies} isLoading={isLoading} />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+        <KpiCard 
+            label="Total Bandwidth" 
+            value={`${(safeBandwidth / 1024).toFixed(2)} Gbps`} 
+            subtitle="Live network throughput" 
+            color="green"
+        />
+        <KpiCard 
+            label="Active Connections" 
+            value={safeActiveConnections.toLocaleString()} 
+            subtitle="Concurrent established sessions" 
+            color="default"
+        />
+        <KpiCard 
+            label="Dropped Packets" 
+            value={`${safeDroppedPackets.toLocaleString()} (${droppedPct}%)`} 
+            subtitle="Indicating network congestion"
+            color={parseFloat(droppedPct) > 1 ? 'red' : 'orange'}
+        />
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Active Network Anomalies (Source IP → Destination App)</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Source IP</TableHead>
-                <TableHead>Destination IP</TableHead>
-                <TableHead>Target Application</TableHead>
-                <TableHead>Port</TableHead>
-                <TableHead>Anomaly Type</TableHead>
-                <TableHead className="text-right">Mitigation</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading && Array.from({ length: 4 }).map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={6}><Skeleton className="h-6 w-full" /></TableCell></TableRow>
-              ))}
-              {!isLoading && data?.networkAnomalies.map((anomaly) => {
-                const key = `${anomaly.sourceIp}-${anomaly.app}`;
-                return (
-                  <TableRow key={anomaly.id}>
-                    <TableCell className="font-mono">{anomaly.sourceIp}</TableCell>
-                    <TableCell className="font-mono">{anomaly.destIp}</TableCell>
-                    <TableCell><Badge variant="outline">{anomaly.app}</Badge></TableCell>
-                    <TableCell>{anomaly.port}</TableCell>
-                    <TableCell><Badge variant="destructive">{anomaly.type}</Badge></TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="destructive" size="sm" disabled={blockingKey === key} onClick={() => handleApplyHardBlock(anomaly)}>
-                        {blockingKey === key ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <ShieldBan className="mr-2 h-4 w-4" />}
-                        {blockingKey === key ? "Applying..." : "Apply Hard Block"}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-              {!isLoading && (!data || data.networkAnomalies.length === 0) && (
-                <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">No network anomalies detected.</TableCell></TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+        <div className="p-5 border-b border-slate-800">
+          <SectionHeader 
+            icon={<Wifi className="w-4 h-4 text-red-500 animate-pulse" />} 
+            title="Active Network Anomalies" 
+            subtitle="Real-time log of suspicious network connections detected by the IDS/IPS system."
+            tooltip="This feed shows traffic flagged as anomalous. Use 'Block Source' to immediately drop all traffic from a suspicious IP." 
+            right={<span className="text-xs text-slate-500">{safeAnomalies.length} active events</span>} 
+          />
+        </div>
+        {safeAnomalies.length > 0 ? (
+            <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm min-w-[700px]">
+                <thead className="bg-slate-950 text-slate-500 uppercase text-xs border-b border-slate-800"><tr><th className="px-5 py-4 font-medium tracking-wider">Source IP</th><th className="px-5 py-4 font-medium tracking-wider">Target Application</th><th className="px-5 py-4 font-medium tracking-wider w-24">Port</th><th className="px-5 py-4 font-medium tracking-wider">Anomaly Type</th><th className="px-5 py-4 font-medium tracking-wider text-right">Mitigation</th></tr></thead>
+                <tbody className="divide-y divide-slate-800">
+                    {safeAnomalies.map((row: NetworkAnomaly, i: number) => (
+                        <AnomalyRow key={row.id || i} row={row} onBlockIp={handleBlockIp} />
+                    ))}
+                </tbody>
+            </table>
+            </div>
+        ) : (
+            <div className="h-60 flex items-center justify-center">
+                <p className="text-slate-500">No active network anomalies detected.</p>
+            </div>
+        )}
+      </div>
     </div>
   );
 }

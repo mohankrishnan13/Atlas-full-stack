@@ -21,49 +21,71 @@ Frontend-discovered contracts:
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared / Primitive Types
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TimeSeriesData(BaseModel):
-    """Generic time-series data point. Extra keys allowed for chart flexibility."""
     name: str
-
     class Config:
         extra = "allow"
 
+class Application(BaseModel):
+    id: str
+    name: str
+
+class User(BaseModel):
+    name: str
+    email: str
+    avatar: str
+
+class TeamUser(BaseModel):
+    id: int
+    name: str
+    email: str
+    role: str
+    avatar: str
+    is_active: bool
+    invite_pending: bool
+
+class RecentAlert(BaseModel):
+    id: str
+    app: str
+    message: str
+    severity: str
+    timestamp: str
+
+class HeaderData(BaseModel):
+    user: User
+    applications: List[Application]
+    recentAlerts: List[RecentAlert]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Overview Page  (/overview?env=)
+# Standard Dashboard Schemas (Legacy / Fallback)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class AppAnomaly(BaseModel):
     name: str
     anomalies: int
 
-
 class Microservice(BaseModel):
     id: str
     name: str
-    status: str        # "Healthy" | "Failing"
-    position: Dict[str, str]   # { top: "50%", left: "15%" }
+    type: str = "Service"
+    status: str
+    position: Dict[str, str]
     connections: List[str]
-
 
 class SystemAnomaly(BaseModel):
     id: str
     service: str
     type: str
-    severity: str      # "Critical" | "High" | "Medium" | "Low"
+    severity: str
     timestamp: str
 
-
 class ApiRequestsByApp(BaseModel):
-    """Categorical: application name -> request count (for bar charts)."""
     app: str
     requests: int
-
 
 class OverviewData(BaseModel):
     apiRequests: int
@@ -73,13 +95,8 @@ class OverviewData(BaseModel):
     appAnomalies: List[AppAnomaly]
     microservices: List[Microservice]
     failingEndpoints: Dict[str, str]
-    apiRequestsByApp: List[ApiRequestsByApp]   # Bar chart: X = app, Y = requests (NO time-series)
+    apiRequestsByApp: List[ApiRequestsByApp]
     systemAnomalies: List[SystemAnomaly]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# API Monitoring Page  (/api-monitoring?env=)
-# ─────────────────────────────────────────────────────────────────────────────
 
 class ApiRoute(BaseModel):
     id: int
@@ -88,34 +105,20 @@ class ApiRoute(BaseModel):
     method: str
     cost: float
     trend: int
-    action: str   # "OK" | "Rate-Limited" | "Blocked"
-
-
-class ApiBlockRouteRequest(BaseModel):
-    """Request to apply hard block on an API route (app + path)."""
-    app: str
-    path: str
-
+    action: str
 
 class ApiConsumptionByApp(BaseModel):
-    """Categorical: app -> actual load vs limit (for bar charts)."""
     app: str
     actual: int
-    limit: int  # or predicted/hard limit
-
+    limit: int
 
 class ApiMonitoringData(BaseModel):
     apiCallsToday: int
     blockedRequests: int
     avgLatency: float
     estimatedCost: float
-    apiConsumptionByApp: List[ApiConsumptionByApp]   # Bar chart: X = app, Y = actual/limit (NO time-series)
+    apiConsumptionByApp: List[ApiConsumptionByApp]
     apiRouting: List[ApiRoute]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Network Traffic Page  (/network-traffic?env=)
-# ─────────────────────────────────────────────────────────────────────────────
 
 class NetworkAnomaly(BaseModel):
     id: int
@@ -125,29 +128,21 @@ class NetworkAnomaly(BaseModel):
     port: int
     type: str
 
-
 class NetworkTrafficData(BaseModel):
     bandwidth: int
     activeConnections: int
     droppedPackets: int
     networkAnomalies: List[NetworkAnomaly]
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Endpoint Security Page  (/endpoint-security?env=)
-# ─────────────────────────────────────────────────────────────────────────────
-
 class OsDistribution(BaseModel):
     name: str
     value: int
-    fill: str   # CSS HSL string e.g. "hsl(var(--chart-1))"
-
+    fill: str
 
 class AlertTypeDistribution(BaseModel):
     name: str
     value: int
     fill: str
-
 
 class WazuhEvent(BaseModel):
     id: int
@@ -157,7 +152,6 @@ class WazuhEvent(BaseModel):
     alert: str
     severity: str
 
-
 class EndpointSecurityData(BaseModel):
     monitoredLaptops: int
     offlineDevices: int
@@ -165,11 +159,6 @@ class EndpointSecurityData(BaseModel):
     osDistribution: List[OsDistribution]
     alertTypes: List[AlertTypeDistribution]
     wazuhEvents: List[WazuhEvent]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Database Monitoring Page  (/db-monitoring?env=)
-# ─────────────────────────────────────────────────────────────────────────────
 
 class SuspiciousActivity(BaseModel):
     id: int
@@ -179,34 +168,24 @@ class SuspiciousActivity(BaseModel):
     table: str
     reason: str
 
-
 class OperationsByApp(BaseModel):
-    """Categorical: target app/database -> operation counts (for bar charts)."""
     app: str
     SELECT: int = 0
     INSERT: int = 0
     UPDATE: int = 0
     DELETE: int = 0
 
-
 class DlpByTargetApp(BaseModel):
-    """Categorical: target app -> suspicious/DLP count (for bar charts)."""
     app: str
     count: int
-
 
 class DbMonitoringData(BaseModel):
     activeConnections: int
     avgQueryLatency: float
     dataExportVolume: float
-    operationsByApp: List[OperationsByApp]   # Bar chart: X = app, Y = ops (NO time-series)
-    dlpByTargetApp: List[DlpByTargetApp]     # Bar chart: X = app, Y = count
+    operationsByApp: List[OperationsByApp]
+    dlpByTargetApp: List[DlpByTargetApp]
     suspiciousActivity: List[SuspiciousActivity]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Incidents Page  (/incidents?env=)  — returns a LIST directly
-# ─────────────────────────────────────────────────────────────────────────────
 
 class Incident(BaseModel):
     id: str
@@ -216,130 +195,265 @@ class Incident(BaseModel):
     sourceIp: str
     destIp: str
     targetApp: str
-    status: str        # "Active" | "Contained" | "Closed"
+    status: str
     eventDetails: str
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# Header / Notification Bell  (/header-data?env=)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class RecentAlert(BaseModel):
-    id: str
-    app: str
-    message: str
-    severity: str
-    timestamp: str   # Human-readable relative: "2m ago"
-
-
-class Application(BaseModel):
-    id: str
-    name: str
-
-
-class User(BaseModel):
-    name: str
-    email: str
-    avatar: str
-
-
-class HeaderData(BaseModel):
-    user: User
-    applications: List[Application]
-    recentAlerts: List[RecentAlert]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Users / Settings  (/users?env=)  — returns a LIST directly
+# Figma-Specific Schemas (New Architecture)
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TeamUser(BaseModel):
+class CaseManagementKpis(BaseModel):
+    criticalOpenCases: int
+    mttr: str
+    unassignedEscalations: int
+
+class CaseManagementCase(BaseModel):
+    caseId: str
+    scopeTags: List[str]
+    aiThreatNarrative: str
+    assigneeName: str
+    assigneeInitials: str
+    status: str
+    playbookActions: List[str]
+    targetApp: str
+
+class CaseManagementResponse(BaseModel):
+    kpis: CaseManagementKpis
+    cases: List[CaseManagementCase]
+
+class AppConfigResponse(BaseModel):
+    env: str
+    appId: str
+    warningAnomalyScore: int
+    criticalAnomalyScore: int
+    softRateLimitCallsPerMin: int
+    hardBlockThresholdCallsPerMin: int
+    autoQuarantineLaptops: bool
+    trainingWindowDays: int
+    modelSensitivityPct: int
+    autoUpdateBaselinesWeekly: bool
+    baselineModelName: str
+    baselineLastUpdatedAt: str
+
+class AppConfigUpdateRequest(BaseModel):
+    warningAnomalyScore: Optional[int] = None
+    criticalAnomalyScore: Optional[int] = None
+    softRateLimitCallsPerMin: Optional[int] = None
+    hardBlockThresholdCallsPerMin: Optional[int] = None
+    autoQuarantineLaptops: Optional[bool] = None
+    trainingWindowDays: Optional[int] = None
+    modelSensitivityPct: Optional[int] = None
+    autoUpdateBaselinesWeekly: Optional[bool] = None
+    baselineModelName: Optional[str] = None
+
+class QuarantinedEndpointRow(BaseModel):
+    workstationId: str
+    user: str
+    timeQuarantined: str
+    action: str
+
+class QuarantinedEndpointsResponse(BaseModel):
+    autoQuarantineLaptops: bool
+    quarantined: List[QuarantinedEndpointRow]
+
+class ScheduledReportRow(BaseModel):
     id: int
+    title: str
+    description: str
+    schedule: str
+    active: bool
+    configureLabel: str
+
+class RecentDownloadRow(BaseModel):
+    id: int
+    fileName: str
+    targetAppScope: str
+    generated: str
+    size: str
+    downloadUrl: str
+
+class ReportsOverviewResponse(BaseModel):
+    scheduledReports: List[ScheduledReportRow]
+    recentDownloads: List[RecentDownloadRow]
+
+class FigmaDashboardAppHealth(BaseModel):
+    targetApp: str
+    currentLoadLabel: str
+    status: str
+    rateLimitLabel: str
+    actionLabel: str
+    tooltip: str
+
+class FigmaDashboardResponse(BaseModel):
+    aiBriefing: str
+    appHealth: List[FigmaDashboardAppHealth]
+
+class FigmaApiOveruseByApp(BaseModel):
+    targetApp: str
+    currentRpm: int
+    limitRpm: int
+    baselineRpm: int
+    spikeLabel: str
+
+class FigmaAbusedEndpointRow(BaseModel):
+    endpoint: str
+    violations: int
+    severity: str
+
+class FigmaTopConsumerRow(BaseModel):
+    consumer: str
+    targetApp: str
+    callsLabel: str
+    costLabel: str
+    isOveruse: bool
+    actionLabel: str
+    actionType: str
+
+class FigmaApiMitigationFeedRow(BaseModel):
+    target: str
+    offender: str
+    violation: str
+    details: str
+    actionLabel: str
+    actionColor: str
+
+class FigmaApiMonitoringResponse(BaseModel):
+    totalApiCallsLabel: str
+    blockedThreatsLabel: str
+    globalAvailabilityLabel: str
+    activeIncidentsLabel: str
+    apiOveruseByTargetApp: List[FigmaApiOveruseByApp]
+    mostAbusedEndpoints: List[FigmaAbusedEndpointRow]
+    topConsumersByTargetApp: List[FigmaTopConsumerRow]
+    activeMitigationFeed: List[FigmaApiMitigationFeedRow]
+
+class FigmaNetworkAnomalyRow(BaseModel):
+    timestamp: str
+    source: str
+    targetApp: str
+    port: str
+    anomalyType: str
+    firewallBlockActive: bool = False
+    controls: List[Dict[str, str]]
+
+class FigmaNetworkTrafficResponse(BaseModel):
+    activeAnomalies: List[FigmaNetworkAnomalyRow]
+
+class FigmaEndpointVulnerableRow(BaseModel):
+    workstationId: str
+    cves: int
+    riskLevel: str
+    topIssue: str
+
+class FigmaEndpointPolicyViolatorRow(BaseModel):
+    user: str
+    violations: int
+    topViolation: str
+
+class FigmaActiveMalwareRow(BaseModel):
+    device: str
+    threat: str
+    actionLabel: str
+
+class FigmaCriticalPolicyViolationRow(BaseModel):
+    device: str
+    violation: str
+    actionLabel: str
+
+class FigmaHighAnomalyUserRow(BaseModel):
+    user: str
+    score: int
+    reason: str
+
+class FigmaEndpointEventAction(BaseModel):
+    label: str
+    actionType: str
+
+class FigmaEndpointEventRow(BaseModel):
+    id: str
+    endpoint: str
+    user: str
+    threat: str
+    severity: str
+    timestamp: str
+    actions: List[FigmaEndpointEventAction]
+
+class FigmaEndpointSecurityResponse(BaseModel):
+    vulnerableEndpoints: List[FigmaEndpointVulnerableRow]
+    policyViolators: List[FigmaEndpointPolicyViolatorRow]
+    activeMalware: List[FigmaActiveMalwareRow]
+    criticalPolicyViolations: List[FigmaCriticalPolicyViolationRow]
+    highAnomalyUsers: List[FigmaHighAnomalyUserRow]
+    endpointEvents: List[FigmaEndpointEventRow]
+
+class FigmaDbExfiltrationRow(BaseModel):
+    targetDb: str
+    volumeGb: float
+    color: str
+
+class FigmaDbSuspiciousSourceRow(BaseModel):
     name: str
-    email: str
-    role: str          # "Admin" | "Analyst"
-    avatar: str
+    queries: int
 
+class FigmaDbSuspiciousActivityRow(BaseModel):
+    id: int
+    timestamp: str
+    actor: str
+    targetDb: str
+    targetTable: str
+    risk: str
+
+class FigmaDatabaseMonitoringResponse(BaseModel):
+    dataExfiltrationRiskByDatabase: List[FigmaDbExfiltrationRow]
+    topSuspiciousQuerySources: List[FigmaDbSuspiciousSourceRow]
+    suspiciousDbActivity: List[FigmaDbSuspiciousActivityRow]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Action Response Schemas  (POST endpoints)
+# Action Request Schemas
 # ─────────────────────────────────────────────────────────────────────────────
+class ApiBlockRouteRequest(BaseModel):
+    app: str
+    path: str
 
 class QuarantineRequest(BaseModel):
     workstationId: str
-
 
 class QuarantineResponse(BaseModel):
     success: bool
     message: str
 
-
 class RemediateRequest(BaseModel):
     incidentId: str
     action: str
-
 
 class RemediateResponse(BaseModel):
     success: bool
     message: str
 
-
 class NetworkBlockRequest(BaseModel):
-    """Request to apply hard block on a source IP / app (network anomalies table)."""
     sourceIp: str
     app: str
 
-
 class DbKillQueryRequest(BaseModel):
-    """Request to kill a suspicious query (DLP table)."""
     activityId: int
     app: str
     user: str
 
+class LiftQuarantineRequest(BaseModel):
+    appId: str
+    workstationId: str
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Velociraptor Webhook Payload  (POST /webhooks/velociraptor)
-# ─────────────────────────────────────────────────────────────────────────────
+class LiftQuarantineResponse(BaseModel):
+    success: bool
+    message: str
 
-class VelociraptorArtifact(BaseModel):
-    """Matches Velociraptor's standard artifact result row schema."""
-    artifact_name: str
-    client_id: str
-    hostname: Optional[str] = None
-    fqdn: Optional[str] = None
-    os: Optional[str] = None
-    timestamp: Optional[str] = None
-    data: Dict[str, Any] = {}
+class GenerateReportRequest(BaseModel):
+    dateRange: str
+    dataSource: str
+    template: str
+    exportFormat: str
 
-
-class VelociraptorWebhookPayload(BaseModel):
-    """
-    Outer envelope that Velociraptor sends in webhook notifications.
-    See FUTURE_IMPLEMENTATION.md for the full payload specification.
-    """
-    artifact: str
-    client_id: str
-    session_id: str
-    rows: List[VelociraptorArtifact] = []
-    timestamp: str
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Containment Rules  (Settings / progressive containment)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class ContainmentRule(BaseModel):
-    rule_id: str
-    name: str
-    warn_threshold: int = 1
-    soft_limit_threshold: int = 3
-    hard_block_threshold: int = 5
-    applies_to_apps: List[str] = []
-    enabled: bool = True
-
-
-class ContainmentRuleUpdate(BaseModel):
-    warn_threshold: Optional[int] = None
-    soft_limit_threshold: Optional[int] = None
-    hard_block_threshold: Optional[int] = None
-    enabled: Optional[bool] = None
+class GenerateReportResponse(BaseModel):
+    success: bool
+    message: str
+    download: Optional[RecentDownloadRow] = None
