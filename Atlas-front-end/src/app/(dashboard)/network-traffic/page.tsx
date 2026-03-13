@@ -88,12 +88,28 @@ export default function NetworkTrafficPage() {
     safeBandwidth, safeActiveConnections, safeDroppedPackets, safeAnomalies
   } = useMemo(() => {
     const netData = data || {};
+    
+    // Defensive parsing with null checks and type coercion
+    const anomalies = Array.isArray(netData.networkAnomalies) 
+      ? netData.networkAnomalies
+          .filter(item => item && typeof item === 'object')
+          .map(item => ({
+            id: Number(item?.id) || 0,
+            sourceIp: String(item?.sourceIp || 'N/A'),
+            destIp: String(item?.destIp || 'N/A'),
+            app: String(item?.app || 'N/A'),
+            port: Number(item?.port) || 0,
+            type: String(item?.type || 'Unknown Anomaly')
+          }))
+          .filter(item => item.sourceIp !== 'N/A')
+      : [];
+
     return {
         safeBandwidth: Number(netData.bandwidth) || 0,
         safeActiveConnections: Number(netData.activeConnections) || 0,
         safeDroppedPackets: Number(netData.droppedPackets) || 0,
-        safeAnomalies: (netData.networkAnomalies || []),
-    }
+        safeAnomalies: anomalies
+    };
   }, [data]);
 
   if (loading) return <div className="p-6 flex justify-center"><LoaderCircle className="w-6 h-6 animate-spin text-slate-500" /></div>;

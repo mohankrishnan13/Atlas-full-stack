@@ -121,15 +121,32 @@ export default function OverviewPage() {
   if (!data) return <div className="flex items-center justify-center h-48 text-slate-500">No backend telemetry data available.</div>;
 
   // --- Defensive Data Parsing & Coercion ---
-  const safeMicroservices = data?.microservices || [];
-  const formattedApiRequests = (data?.apiRequestsByApp || []).map(item => ({
-    ...item,
-    app: item.app || 'Unknown',
-    requests: Number(item.requests) || 0
+  const safeMicroservices = (data?.microservices || []).filter(svc => svc && typeof svc === 'object').map(svc => ({
+    id: String(svc?.id || ''),
+    name: String(svc?.name || 'Unknown Service'),
+    type: String(svc?.type || 'Service'),
+    status: String(svc?.status || 'Unknown'),
+    position: {
+      top: String(svc?.position?.top || '50%'),
+      left: String(svc?.position?.left || '50%')
+    },
+    connections: Array.isArray(svc?.connections) ? svc.connections.filter(c => typeof c === 'string') : []
   }));
 
+  const formattedApiRequests = (data?.apiRequestsByApp || [])
+    .filter(item => item && typeof item === 'object')
+    .map(item => ({
+      app: String(item?.app || 'Unknown'),
+      requests: Number(item?.requests || 0)
+    }))
+    .filter(item => item.requests > 0);
+
   const riskData = (data?.appAnomalies || [])
-    .map(a => ({ ...a, name: a.name || 'Unknown', anomalies: Number(a.anomalies) || 0 }))
+    .filter(a => a && typeof a === 'object')
+    .map(a => ({ 
+      name: String(a?.name || 'Unknown'), 
+      anomalies: Number(a?.anomalies || 0) 
+    }))
     .filter(a => a.anomalies > 0)
     .sort((a, b) => b.anomalies - a.anomalies)
     .slice(0, 5);
@@ -147,16 +164,19 @@ export default function OverviewPage() {
         {safeMicroservices.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {(safeMicroservices).map(svc => {
-              const reqData = formattedApiRequests.find(a => a.app.toLowerCase().includes((svc?.name || '').toLowerCase().split('-')[0]));
+              const reqData = formattedApiRequests.find(a => 
+                a?.app && svc?.name && 
+                a.app.toLowerCase().includes(svc.name.toLowerCase().split('-')[0])
+              );
               const rpm = Number(reqData?.requests) || 0;
               
               return (
                 <AppHealthCard 
-                  key={svc.id}
-                  appName={svc.name || 'Unknown Service'}
+                  key={String(svc?.id || `svc-${Math.random()}`)}
+                  appName={String(svc?.name || 'Unknown Service')}
                   load={`${rpm.toLocaleString()} req/m`}
-                  status={svc.status || 'Healthy'} 
-                  onAction={() => handleMitigate(svc.name || '')} 
+                  status={String(svc?.status || 'Unknown')} 
+                  onAction={() => handleMitigate(String(svc?.name || ''))} 
                 />
               );
             })}
@@ -180,7 +200,7 @@ export default function OverviewPage() {
                   tickLine={false} 
                   axisLine={{ stroke: '#334155' }} 
                   interval={0}
-                  tickFormatter={(value) => truncateLabel(value, 10)}
+                  tickFormatter={(value) => truncateLabel(String(value || ''), 10)}
                 >
                   <Label value="Application" position="bottom" offset={25} className="fill-slate-500 text-xs"/>
                 </XAxis>

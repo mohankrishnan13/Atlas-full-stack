@@ -111,22 +111,33 @@ export default function ApiMonitoringPage() {
     formattedApiConsumption, abusedEndpoints, fullEndpointLabels 
   } = useMemo(() => {
     const safeData = data || {};
-    const consumption = (safeData.apiConsumptionByApp || []).map(item => ({
-      app: item.app || 'Unknown',
-      actual: Number(item.actual) || 0,
-      limit: Number(item.limit) || 0,
-    }));
+    
+    // Defensive parsing with null checks and type coercion
+    const consumption = (safeData.apiConsumptionByApp || [])
+      .filter(item => item && typeof item === 'object')
+      .map(item => ({
+        app: String(item?.app || 'Unknown'),
+        actual: Number(item?.actual) || 0,
+        limit: Number(item?.limit) || 0,
+      }))
+      .filter(item => item.actual > 0);
 
-    const endpoints = (safeData.apiRouting || []).map((item, index) => ({
-      id: item.id ?? index,
-      app: item.app || 'Unknown',
-      path: item.path || '/',
-      violations: Math.abs(Number(item.trend) || 0),
-      severity: (Number(item.trend) || 0) > 100 ? 'critical' : 'high', // Example logic
-    })).filter(item => item.violations > 50).sort((a,b) => b.violations - a.violations).slice(0, 10);
+    const endpoints = (safeData.apiRouting || [])
+      .map((item, index) => ({
+        id: Number(item?.id) || index,
+        app: String(item?.app || 'Unknown'),
+        path: String(item?.path || '/'),
+        violations: Math.abs(Number(item?.trend) || 0),
+        severity: (Number(item?.trend) || 0) > 100 ? 'critical' : 'high',
+      }))
+      .filter(item => item.violations > 50)
+      .sort((a,b) => b.violations - a.violations)
+      .slice(0, 10);
 
-    const endpointLabels = endpoints.reduce((acc: any, item: any) => {
-        acc[truncateLabel(`[${item.app}] ${item.path}`, 15)] = `[${item.app}] ${item.path}`;
+    const endpointLabels = endpoints.reduce((acc: Record<string, string>, item: any) => {
+        const label = `[${item.app}] ${item.path}`;
+        const truncated = truncateLabel(label, 15);
+        acc[truncated] = label;
         return acc;
     }, {});
 

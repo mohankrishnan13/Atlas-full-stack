@@ -334,7 +334,7 @@ def _build_network_df() -> pd.DataFrame:
     # --- Synthesize and harmonize columns ---
     # Extract IPs if a 'Content' or 'message' field exists
     content_col = next((col for col in df.columns if col.lower() in ['content', 'message', 'logline']), None)
-    ip_re = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+    ip_re = re.compile(r'(\b(?:\d{1,3}\.){3}\d{1,3}\b)')
     if content_col:
         df['source_ip'] = df[content_col].str.extract(ip_re, expand=False).fillna('')
     else:
@@ -544,32 +544,52 @@ async def get_overview(env: str, db: AsyncSession) -> OverviewData:
     a = _get_df_for_env(_build_api_df, env)
     e = _get_df_for_env(_build_endpoint_df, env)
 
-    api_requests = int(a["calls_today"].sum()) if not a.empty else 0
-    active_alerts = int((a["severity"].isin(["Critical", "High"])).sum()) if not a.empty else 0
-    blocked = int((a["action"] == "Blocked").sum()) if not a.empty else 0
-    error_rate = round((blocked / max(len(a), 1)) * 100, 1)
-    cost_risk = min(10, int((blocked / max(len(a), 1)) * 100))
+    # Defensive data aggregation with proper null handling
+    api_requests = int(a["calls_today"].sum()) if not a.empty and "calls_today" in a.columns else 0
+    active_alerts = int(a["severity"].isin(["Critical", "High"]).sum()) if not a.empty and "severity" in a.columns else 0
+    blocked = int((a["action"] == "Blocked").sum()) if not a.empty and "action" in a.columns else 0
+    error_rate = round((blocked / max(len(a), 1)) * 100, 1) if not a.empty else 0.0
+    cost_risk = min(10, int((blocked / max(len(a), 1)) * 100)) if not a.empty else 0
 
     app_anomalies = []
-    if not e.empty:
+    if not e.empty and "target_app" in e.columns:
         anom_counts = e.groupby("target_app").size().nlargest(8).reset_index(name="anomalies")
-        app_anomalies = [AppAnomaly(name=row["target_app"], anomalies=int(row["anomalies"])) for _, row in anom_counts.iterrows()]
+        app_anomalies = [AppAnomaly(name=str(row["target_app"])[:50], anomalies=int(row["anomalies"])) for _, row in anom_counts.iterrows() if pd.notna(row["target_app"])]
 
     api_requests_by_app = []
-    if not a.empty:
+    if not a.empty and "target_app" in a.columns and "calls_today" in a.columns:
         rpm_counts = a.groupby("target_app").size().nlargest(12).reset_index(name="requests")
-        api_requests_by_app = [ApiRequestsByApp(app=row["target_app"], requests=int(row["requests"])) for _, row in rpm_counts.iterrows()]
+        api_requests_by_app = [ApiRequestsByApp(app=str(row["target_app"])[:50], requests=int(row["requests"])) for _, row in rpm_counts.iterrows() if pd.notna(row["target_app"])]
 
     svc_rows = (await db.execute(select(MicroserviceRow).where(MicroserviceRow.env == env))).scalars().all()
-    microservices = [Microservice(id=s.service_id, name=s.name, type="Gateway" if "gateway" in s.name.lower() else "Service", status=s.status, position={"top": s.position_top, "left": s.position_left}, connections=[c for c in (s.connections_csv or "").split(",") if c]) for s in svc_rows]
+    microservices = [
+        Microservice(
+            id=str(s.service_id)[:50], 
+            name=str(s.name)[:100], 
+            type="Gateway" if "gateway" in s.name.lower() else "Service", 
+            status=str(s.status)[:20], 
+            position={"top": str(s.position_top)[:10], "left": str(s.position_left)[:10]}, 
+            connections=[str(c)[:50] for c in (s.connections_csv or "").split(",") if c.strip()][:10]
+        ) 
+        for s in svc_rows
+    ]
 
     inc_result = await db.execute(select(Incident).where(Incident.env == env, Incident.status.in_(["Active", "Contained"])).order_by(Incident.timestamp.desc()).limit(5))
-    system_anomalies = [SystemAnomaly(id=inc.incident_id, service=inc.target_app, type=inc.event_name, severity=inc.severity, timestamp=inc.timestamp) for inc in inc_result.scalars().all()]
+    system_anomalies = [
+        SystemAnomaly(
+            id=str(inc.incident_id)[:50], 
+            service=str(inc.target_app)[:50], 
+            type=str(inc.event_name)[:100], 
+            severity=str(inc.severity)[:20], 
+            timestamp=str(inc.timestamp)[:50]
+        ) 
+        for inc in inc_result.scalars().all()
+    ]
 
     failing_endpoints = {}
-    if not a.empty:
+    if not a.empty and "severity" in a.columns and "path" in a.columns:
         fe = a[a["severity"].isin(["High", "Critical"])].groupby("path").size().nlargest(10)
-        failing_endpoints = {path: str(count) for path, count in fe.items()}
+        failing_endpoints = {str(path)[:100]: str(int(count)) for path, count in fe.items() if pd.notna(path)}
 
     return OverviewData(
         apiRequests=api_requests, errorRate=error_rate, activeAlerts=active_alerts, costRisk=cost_risk,
@@ -579,23 +599,56 @@ async def get_overview(env: str, db: AsyncSession) -> OverviewData:
 
 async def get_api_monitoring(env: str, db: AsyncSession) -> ApiMonitoringData:
     a = _get_df_for_env(_build_api_df, env)
-    if a.empty: return ApiMonitoringData()
+    if a.empty: 
+        return ApiMonitoringData(
+            apiCallsToday=0,
+            blockedRequests=0,
+            avgLatency=0.0,
+            estimatedCost=0.0,
+            apiConsumptionByApp=[],
+            apiRouting=[]
+        )
 
-    total = int(a["calls_today"].sum())
-    blocked = int((a["action"] == "Blocked").sum())
-    avg_lat = float(a["avg_latency_ms"].mean())
-    est_cost = float(a["estimated_cost"].sum())
+    # Defensive data extraction with column validation
+    total = int(a["calls_today"].sum()) if "calls_today" in a.columns else 0
+    blocked = int((a["action"] == "Blocked").sum()) if "action" in a.columns else 0
+    avg_lat = float(a["avg_latency_ms"].mean()) if "avg_latency_ms" in a.columns else 0.0
+    est_cost = float(a["estimated_cost"].sum()) if "estimated_cost" in a.columns else 0.0
 
-    agg = a.groupby("target_app").agg(actual=("calls_today", "mean"), limit_raw=("calls_today", "mean")).reset_index()
-    agg["actual"] = agg["actual"].astype(int)
-    agg["limit"] = (agg["actual"] * 1.2).astype(int)
-    blocked_apps = a[a["action"] == "Blocked"]["target_app"].unique()
-    agg.loc[agg["target_app"].isin(blocked_apps), "limit"] *= 0.8 # Simulate being over limit
+    api_consumption = []
+    if "target_app" in a.columns and "calls_today" in a.columns:
+        agg = a.groupby("target_app").agg(calls=("calls_today", "sum")).reset_index()
+        api_consumption = [
+            ApiConsumptionByApp(
+                app=str(row["target_app"])[:50], 
+                actual=int(row["calls"]) if pd.notna(row["calls"]) else 0,
+                limit=int(row["calls"] * 1.2) if pd.notna(row["calls"]) else 0
+            ) 
+            for _, row in agg.nlargest(12, 'calls').iterrows() if pd.notna(row["target_app"])
+        ]
 
-    api_consumption = [ApiConsumptionByApp(app=row["target_app"], actual=int(row["actual"]), limit=int(row["limit"])) for _, row in agg.nlargest(12, 'actual').iterrows()]
-
-    route_agg = a.groupby(["target_app", "path"]).agg(method=("method", "first"), cost=("cost_per_call", "first"), trend=("trend_pct", "first"), action=("action", lambda x: x.mode()[0])).reset_index().nlargest(50, 'cost')
-    api_routing = [ApiRoute(id=i + 1, app=row["target_app"], path=row["path"], method=row["method"], cost=float(row["cost"]), trend=int(row["trend"]), action=row["action"]) for i, (_, row) in enumerate(route_agg.iterrows())]
+    api_routing = []
+    required_cols = ["target_app", "path", "method", "cost_per_call", "trend_pct", "action"]
+    if all(col in a.columns for col in required_cols):
+        route_agg = a.groupby(["target_app", "path"]).agg({
+            "method": "first",
+            "cost_per_call": "first", 
+            "trend_pct": "first",
+            "action": lambda x: x.mode()[0] if len(x.mode()) > 0 else "OK"
+        }).reset_index().nlargest(50, 'cost_per_call')
+        
+        api_routing = [
+            ApiRoute(
+                id=i + 1,
+                app=str(row["target_app"])[:50],
+                path=str(row["path"])[:200],
+                method=str(row["method"])[:10],
+                cost=float(row["cost_per_call"]) if pd.notna(row["cost_per_call"]) else 0.0,
+                trend=int(row["trend_pct"]) if pd.notna(row["trend_pct"]) else 0,
+                action=str(row["action"])[:20]
+            ) 
+            for i, (_, row) in enumerate(route_agg.iterrows()) if pd.notna(row["target_app"])
+        ]
 
     return ApiMonitoringData(
         apiCallsToday=total, blockedRequests=blocked, avgLatency=avg_lat,
@@ -604,17 +657,38 @@ async def get_api_monitoring(env: str, db: AsyncSession) -> ApiMonitoringData:
 
 async def get_network_traffic(env: str, db: AsyncSession) -> NetworkTrafficData:
     n = _get_df_for_env(_build_network_df, env)
-    if n.empty: return NetworkTrafficData()
+    if n.empty: 
+        return NetworkTrafficData(
+            bandwidth=0,
+            activeConnections=0,
+            droppedPackets=0,
+            networkAnomalies=[]
+        )
 
-    bw = int(n.iloc[0]["bandwidth_pct"]) if not n.empty else 0
-    active = int(n["active_connections"].mean()) if not n.empty else 0
-    dropped = int(n["dropped_packets"].sum()) if not n.empty else 0
+    # Defensive data extraction with column validation
+    bandwidth = int(n["bandwidth_pct"].mean()) if "bandwidth_pct" in n.columns else 0
+    active_connections = int(n["active_connections"].mean()) if "active_connections" in n.columns else 0
+    dropped_packets = int(n["dropped_packets"].sum()) if "dropped_packets" in n.columns else 0
 
-    severity_order = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3, "Info": 4}
-    top_n = n.sort_values("severity", key=lambda s: s.map(severity_order)).drop_duplicates(subset=["source_ip", "app"]).head(15)
-    anomalies = [NetworkAnomaly(id=i + 1, sourceIp=row["source_ip"], destIp=row["dest_ip"], app=row["app"], port=int(row["port"]), type=row["anomaly_type"]) for i, (_, row) in enumerate(top_n.iterrows())]
+    network_anomalies = []
+    required_cols = ["source_ip", "dest_ip", "app", "port", "anomaly_type"]
+    if all(col in n.columns for col in required_cols):
+        network_anomalies = [
+            NetworkAnomaly(
+                id=i + 1,
+                sourceIp=str(row["source_ip"])[:45] if pd.notna(row["source_ip"]) else "Unknown",
+                destIp=str(row["dest_ip"])[:45] if pd.notna(row["dest_ip"]) else "Unknown",
+                app=str(row["app"])[:50] if pd.notna(row["app"]) else "Unknown",
+                port=int(row["port"]) if pd.notna(row["port"]) else 0,
+                type=str(row["anomaly_type"])[:100] if pd.notna(row["anomaly_type"]) else "Unknown",
+            ) 
+            for i, (_, row) in enumerate(n.head(50).iterrows())
+        ]
 
-    return NetworkTrafficData(bandwidth=bw, activeConnections=active, droppedPackets=dropped, networkAnomalies=anomalies)
+    return NetworkTrafficData(
+        bandwidth=bandwidth, activeConnections=active_connections, droppedPackets=dropped_packets,
+        networkAnomalies=network_anomalies,
+    )
 
 async def get_endpoint_security(env: str, db: AsyncSession) -> EndpointSecurityData:
     e = _get_df_for_env(_build_endpoint_df, env)
