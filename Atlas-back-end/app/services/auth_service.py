@@ -182,13 +182,15 @@ async def seed_default_admin() -> None:
         db.add_all([admin, analyst, readonly])
         await db.commit()
 
+        inner = 60  # width between the two ║ characters
+
         logger.warning(
             "\n"
-            "╔══════════════════════════════════════════════════════════════╗\n"
-            "║         ATLAS — DEFAULT SEED ACCOUNTS CREATED                ║\n"
-            f"║  Admin:     {settings.seed_admin_email:<44}║\n"
-            f"║  Analyst:   {settings.seed_analyst_email:<44}║\n"
-            f"║  Read-Only: {settings.seed_readonly_email:<44}║\n"
-            "║  Override credentials in .env before first production boot!  ║\n"
-            "╚══════════════════════════════════════════════════════════════╝"
+            f"╔{'═'*inner}╗\n"
+            f"║{'ATLAS — DEFAULT SEED ACCOUNTS CREATED':^{inner}}║\n"
+            f"║{'Admin:     ' + settings.seed_admin_email:<{inner}}║\n"
+            f"║{'Analyst:   ' + settings.seed_analyst_email:<{inner}}║\n"
+            f"║{'Read-Only: ' + settings.seed_readonly_email:<{inner}}║\n"
+            f"║{'Override credentials in .env before first production boot!':<{inner}}║\n"
+            f"╚{'═'*inner}╝"
         )

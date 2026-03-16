@@ -14,6 +14,8 @@ and production environments can skip whichever steps are unnecessary.
 
 import logging
 from contextlib import asynccontextmanager
+import asyncio
+from app.services.wazuh_service import WazuhCollector 
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -265,3 +267,40 @@ async def admin_reload_cache():
             status_code=500,
             content={"status": "error", "detail": str(exc)},
         )
+
+async def start_wazuh_sync():
+    """Background task to poll Wazuh every 30 seconds."""
+    collector = WazuhCollector(host="127.0.0.1") # Point to your laptop's IP
+    while True:
+        try:
+            logger.info("Polling Wazuh Manager for new alerts...")
+            async with AsyncSessionLocal() as db:
+                await collector.sync_alerts(db)
+            
+            # After syncing DB, refresh the Pandas cache so charts update
+            _invalidate_cache()
+            warm_cache()
+            
+            logger.info("Wazuh sync complete. Dashboard updated.")
+        except Exception as e:
+            logger.error(f"Wazuh Sync Error: {e}")
+        
+        await asyncio.sleep(300) # Wait 300 seconds (5 minutes) before next poll
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ... 1. DDL sync ...
+    # ... 2. Seed admin ...
+    # ... 3. Seed apps ...
+
+    # 4. Start the Wazuh Background Task
+    # This runs 'in the background' without blocking the API start
+    wazuh_task = asyncio.create_task(start_wazuh_sync())
+
+    logger.info("ATLAS is live with real Wazuh data streaming.")
+
+    yield  # ── Application is running ──────────────────────────────────────
+
+    # Cleanup
+    wazuh_task.cancel()
+    await close_db()

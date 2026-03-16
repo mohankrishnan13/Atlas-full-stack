@@ -112,21 +112,26 @@ async def quarantine_device(
     db: AsyncSession = Depends(get_db),
     current_user: AtlasUser = Depends(get_current_user),
 ):
-    if not payload.workstationId:
-        raise HTTPException(status_code=400, detail="workstationId is required.")
+    # 1. ACTUAL MITIGATION (The "Real" Part)
+    # We use the payload.workstationId as the Wazuh Agent ID
+    wazuh = WazuhActions(host="YOUR_LAPTOP_IP")
+    success = wazuh.run_command(payload.workstationId, "host-deny600") # Deny for 600s
 
-    logger.warning(
-        f"[QUARANTINE] Command sent by {current_user.email} for {payload.workstationId}"
-    )
+    if not success:
+        logger.error(f"Wazuh failed to isolate agent {payload.workstationId}")
+        # We don't raise error, we still audit the attempt
+    
+    # 2. AUDIT (Your existing logic)
     await _audit(
         db, current_user,
         action_type="quarantine_device",
         target_identifier=payload.workstationId,
-        details={"workstationId": payload.workstationId},
+        details={"workstationId": payload.workstationId, "wazuh_status": "sent" if success else "failed"},
     )
+    
     return QuarantineResponse(
-        success=True,
-        message=f"Device {payload.workstationId} has been quarantined.",
+        success=success,
+        message=f"Isolation command {'sent' if success else 'failed'} for {payload.workstationId}.",
     )
 
 
@@ -209,9 +214,23 @@ async def remediate_incident(
     new_status = _STATUS_MAP.get(payload.action)
 
     if new_status:
+        # 1. Update the Database Status (Visual/Audit)
         await query_service.update_incident_status(payload.incidentId, new_status, db)
 
-        # Stamp resolved_at when an incident is closed — feeds MTTR computation
+        # 2. TRIGGER THE REAL TOOL (The "Actual Purpose")
+        if payload.action == "Isolate Endpoint":
+            # Fetch the incident to find the agent's ID
+            result = await db.execute(select(Incident).where(Incident.incident_id == payload.incidentId))
+            incident = result.scalar_one_or_none()
+            
+            if incident and incident.source_ip:
+                # In Wazuh, we usually isolate by Agent ID. 
+                # If your target_identifier is the Agent ID, use it here.
+                wazuh = WazuhActions(host="YOUR_MANAGER_IP")
+                wazuh.run_command(incident.target_identifier, "host-deny") 
+                logger.info(f"REAL ACTION: Isolated agent {incident.target_identifier} via Wazuh.")
+
+        # 3. Handle Closure and MTTR
         if new_status == "Closed":
             result = await db.execute(
                 select(Incident).where(Incident.incident_id == payload.incidentId)

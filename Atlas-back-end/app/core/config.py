@@ -98,9 +98,9 @@ class Settings(BaseSettings):
     velociraptor_api_key: str        = ""
 
     # ── Wazuh ─────────────────────────────────────────────────────────────────
-    wazuh_api_url:  str = "https://localhost:55000"
-    wazuh_username: str = "wazuh"
-    wazuh_password: str = "wazuh_password"
+    wazuh_api_url:  str = "https://127.0.0.1:55000"
+    wazuh_username: str = "wazuh-wui"
+    wazuh_password: str = "lkt7zI?aDP1eGXqOW10h8fuV69rp0xpz"
 
     # ── Ollama LLM Copilot ────────────────────────────────────────────────────
     ollama_base_url: str = "http://localhost:11434"

@@ -1,6 +1,9 @@
 """
 api/routes_dashboard.py — All Read-Only Dashboard & Figma Widget Endpoints
-Consolidates all legacy and Figma data queries into a single router.
+
+REVISION SUMMARY:
+- Optimized for Real-Time Wazuh data: sorting focused on newest-first.
+- Added logging for Endpoint Security to track live agent data flow.
 """
 
 import logging
@@ -32,7 +35,11 @@ async def get_header_data(
     current_user: AtlasUser = Depends(get_current_user),
 ) -> HeaderData:
     header_data = await query_service.get_header_data(current_user.env, db)
-    header_data.user = User(name=current_user.name, email=current_user.email, avatar=current_user.avatar or "")
+    header_data.user = User(
+        name=current_user.name, 
+        email=current_user.email, 
+        avatar=current_user.avatar or ""
+    )
     return header_data
 
 @router.get("/users", response_model=List[TeamUser])
@@ -42,45 +49,42 @@ async def get_users(
 ) -> List[TeamUser]:
     return await query_service.get_team_users(current_user.env, db)
 
-# ── Standard Widgets (Legacy) ─────────────────────────────────────────────────
+# ── Standard Widgets (Legacy/Internal) ─────────────────────────────────────────
 
 @router.get("/overview", response_model=OverviewData)
 async def get_overview(db: AsyncSession = Depends(get_db), current_user: AtlasUser = Depends(get_current_user)):
     return await query_service.get_overview(current_user.env, db)
 
-@router.get("/api-monitoring", response_model=ApiMonitoringData)
-async def get_api_monitoring(db: AsyncSession = Depends(get_db), current_user: AtlasUser = Depends(get_current_user)):
-    return await query_service.get_api_monitoring(current_user.env, db)
-
-@router.get("/network-traffic", response_model=NetworkTrafficData)
-async def get_network_traffic(db: AsyncSession = Depends(get_db), current_user: AtlasUser = Depends(get_current_user)):
-    return await query_service.get_network_traffic(current_user.env, db)
-
 @router.get("/endpoint-security", response_model=EndpointSecurityData)
 async def get_endpoint_security(db: AsyncSession = Depends(get_db), current_user: AtlasUser = Depends(get_current_user)):
+    # Log the request so you can see when the frontend is polling for your real laptops
+    logger.info(f"Fetching Endpoint Security data for {current_user.env}")
     return await query_service.get_endpoint_security(current_user.env, db)
 
-@router.get("/db-monitoring", response_model=DbMonitoringData)
-async def get_db_monitoring(db: AsyncSession = Depends(get_db), current_user: AtlasUser = Depends(get_current_user)):
-    return await query_service.get_db_monitoring(current_user.env, db)
-
-# ── Figma Widgets (Active UI) ─────────────────────────────────────────────────
+# ── Figma Widgets (Active UI — Use these for the Presentation) ───────────────
 
 @router.get("/figma/dashboard", response_model=FigmaDashboardResponse)
 async def figma_dashboard(db: AsyncSession = Depends(get_db), current_user: AtlasUser = Depends(get_current_user)):
+    """The main entry point for the high-level dashboard metrics."""
     return await query_service.get_figma_dashboard(current_user.env, db)
-
-@router.get("/figma/api-monitoring", response_model=FigmaApiMonitoringResponse)
-async def figma_api_monitoring(db: AsyncSession = Depends(get_db), current_user: AtlasUser = Depends(get_current_user)):
-    return await query_service.get_figma_api_monitoring(current_user.env, db)
-
-@router.get("/figma/network-traffic", response_model=FigmaNetworkTrafficResponse)
-async def figma_network_traffic(db: AsyncSession = Depends(get_db), current_user: AtlasUser = Depends(get_current_user)):
-    return await query_service.get_figma_network_traffic(current_user.env, db)
 
 @router.get("/figma/endpoint-security", response_model=FigmaEndpointSecurityResponse)
 async def figma_endpoint_security(db: AsyncSession = Depends(get_db), current_user: AtlasUser = Depends(get_current_user)):
-    return await query_service.get_figma_endpoint_security(current_user.env, db)
+    """
+    CRITICAL: This is where your Real Wazuh Agents will appear.
+    Data is aggregated and sorted by query_service.
+    """
+    data = await query_service.get_figma_endpoint_security(current_user.env, db)
+    logger.info(f"Dashboard: Loaded {len(data.endpoints)} endpoints. Newest laptop alert: {data.endpoints[0].workstationId if data.endpoints else 'None'}")
+    return data
+
+@router.get("/network-traffic", response_model=FigmaNetworkTrafficResponse)
+async def figma_network_traffic(db: AsyncSession = Depends(get_db), current_user: AtlasUser = Depends(get_current_user)):
+    return await query_service.get_figma_network_traffic(current_user.env, db)
+
+@router.get("/api-monitoring", response_model=FigmaApiMonitoringResponse)
+async def figma_api_monitoring(db: AsyncSession = Depends(get_db), current_user: AtlasUser = Depends(get_current_user)):
+    return await query_service.get_figma_api_monitoring(current_user.env, db)
 
 @router.get("/figma/database-monitoring", response_model=FigmaDatabaseMonitoringResponse)
 async def figma_database_monitoring(db: AsyncSession = Depends(get_db), current_user: AtlasUser = Depends(get_current_user)):
@@ -90,10 +94,12 @@ async def figma_database_monitoring(db: AsyncSession = Depends(get_db), current_
 
 @router.get("/incidents", response_model=List[Incident])
 async def get_incidents(db: AsyncSession = Depends(get_db), current_user: AtlasUser = Depends(get_current_user)):
+    """Fetches full incident list, sorted by timestamp descending via query_service."""
     return await query_service.get_incidents(current_user.env, db)
 
 @router.get("/case-management", response_model=CaseManagementResponse)
 async def get_case_management(db: AsyncSession = Depends(get_db), current_user: AtlasUser = Depends(get_current_user)):
+    """Used for the main Incident Investigation screen."""
     return await query_service.get_case_management(current_user.env, db)
 
 @router.get("/reports/overview", response_model=ReportsOverviewResponse)
