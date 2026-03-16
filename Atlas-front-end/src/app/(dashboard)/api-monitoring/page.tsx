@@ -134,40 +134,49 @@ export default function ApiMonitoringPage() {
       }
     }
 
+    // API Consumption — maps directly from apiConsumptionByApp
     const apiConsumption =
-      data.apiConsumptionByApp?.map((d) => ({
+      (data.apiConsumptionByApp ?? []).map((d) => ({
         app: d.app ?? 'Unknown',
         actual: Number(d.actual) || 0,
         limit: Number(d.limit) || 0
-      })) ?? []
+      }))
 
+    // Abused endpoints — derived from apiRouting, sorted by trend descending
     const abusedEndpoints =
-      data.mostAbusedEndpoints?.map((e, i) => ({
-        id: `${e.endpoint}-${i}`,
-        endpoint: e.endpoint ?? '/',
-        violations: Math.abs(Number(e.violations) || 0),
-        severity:
-          Number(e.violations) > 100 ? 'critical' : 'high'
-      })) ?? []
+      (data.apiRouting ?? [])
+        .filter((r) => r.path && r.path !== '/')
+        .map((r, i) => ({
+          id: `${r.app}-${r.path}-${i}`,
+          endpoint: `[${r.app}] ${r.path}`,
+          violations: Math.abs(Number(r.trend) || 0),
+          severity: (Number(r.trend) > 100 || r.action !== 'OK') ? 'critical' : 'high'
+        }))
+        .sort((a, b) => b.violations - a.violations)
+        .slice(0, 10)
 
+    // Top consumers — derived from apiConsumptionByApp, routes overuse flag
     const consumers =
-      data.topConsumers?.map((c) => ({
-        id: `${c.consumer}-${c.application_name}`,
-        consumer: c.consumer,
-        app: c.application_name,
-        calls: Number(c.total_calls) || 0,
-        cost: Number(c.average_cost) || 0,
-        isOveruse: Boolean(c.is_overuse)
-      })) ?? []
+      (data.apiConsumptionByApp ?? []).map((c) => ({
+        id: `${c.app}`,
+        consumer: c.app,
+        app: c.app,
+        calls: Number(c.actual) || 0,
+        cost: Number(c.actual) * 0.0001,           // proxy cost until backend exposes it
+        isOveruse: Number(c.actual) > Number(c.limit)
+      }))
 
+    // Active mitigations — routes where action !== 'OK' (blocked/rate-limited)
     const mitigations =
-      data.activeMitigations?.map((m, i) => ({
-        id: `${m.target}-${i}`,
-        target: m.target,
-        offender: m.offender,
-        violation: m.violation_type,
-        action: m.action ?? 'Notify Team'
-      })) ?? []
+      (data.apiRouting ?? [])
+        .filter((r) => r.action && r.action !== 'OK')
+        .map((r, i) => ({
+          id: `${r.app}-${r.path}-${i}`,
+          target: r.app,
+          offender: r.path,
+          violation: r.action,
+          action: 'Enforce Hard Block'
+        }))
 
     return {
       apiConsumption,
@@ -183,9 +192,10 @@ export default function ApiMonitoringPage() {
 
   async function handleAction(action: string, target: string) {
     try {
-      await apiPost('/api-monitoring/action', {
-        action,
-        target
+      // Route matches backend POST /api-monitoring/block-route
+      await apiPost('/api-monitoring/block-route', {
+        app: target,
+        path: '/*'
       })
 
       toast.success('Mitigation applied', {

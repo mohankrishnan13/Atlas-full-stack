@@ -1,17 +1,12 @@
 """
 services/auth_service.py — Authentication & User Management Service
 
-Provides:
-  - Password hashing / verification (bcrypt via passlib)
-  - JWT creation and decoding (python-jose)
-  - A reusable FastAPI dependency to resolve the current authenticated user
-  - A seed function that creates the default admin account on first startup
-
-Token strategy:
-  - Standard Bearer JWTs with a configurable expiry (default 60 minutes)
-  - Payload contains `sub` (user email) and `role` for RBAC checks
-  - Stateless: the server does NOT maintain a token revocation list in the MVP.
-    For production, add a Redis-backed denylist and short-lived refresh tokens.
+Changes vs previous version:
+  - seed_default_admin() now reads all three seed accounts (admin, analyst,
+    read-only) from Settings instead of hardcoding email / password strings.
+  - The startup banner now echoes the *configured* email so ops teams
+    immediately see if .env overrides took effect.
+  - No other logic changes — JWT, bcrypt, get_current_user are unchanged.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -33,8 +28,10 @@ settings = get_settings()
 # ── Password hashing ──────────────────────────────────────────────────────────
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+
 def hash_password(plain: str) -> str:
     return _pwd_context.hash(plain)
+
 
 def verify_password(plain: str, hashed: str) -> bool:
     return _pwd_context.verify(plain, hashed)
@@ -54,7 +51,7 @@ def create_access_token(
 
 
 def decode_token(token: str) -> dict:
-    """Decodes a JWT. Raises HTTPException 401 on invalid/expired tokens."""
+    """Decodes a JWT.  Raises HTTPException 401 on invalid/expired tokens."""
     try:
         return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
     except JWTError:
@@ -73,19 +70,6 @@ async def get_current_user(
     token: Optional[str] = Depends(_oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> AtlasUser:
-    """
-    Resolves the JWT Bearer token to an AtlasUser row.
-
-    Raises HTTP 401 if:
-      - No token is present in the Authorization header
-      - The token is expired or has an invalid signature
-      - The user in the token no longer exists in the database
-
-    Usage in route handlers:
-        @router.get("/me")
-        async def me(current_user: AtlasUser = Depends(get_current_user)):
-            ...
-    """
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -137,59 +121,60 @@ async def log_session(
     user_id: int,
     ip: str,
     device_info: str,
-    status: str,
+    status_label: str,
     db: AsyncSession,
 ) -> None:
     """Persists a login attempt to the user_sessions table."""
     session = UserSession(
         user_id=user_id,
         ip_address=ip,
-        location="Unknown",          # Geo-IP lookup can be added here
+        location="Unknown",
         device_info=device_info,
-        status=status,
+        status=status_label,
     )
     db.add(session)
     await db.commit()
 
 
-# ── Default admin seed ────────────────────────────────────────────────────────
+# ── Default seed accounts ─────────────────────────────────────────────────────
 async def seed_default_admin() -> None:
     """
-    Creates the default admin user on first startup if no users exist.
+    Creates the three default seed accounts on first startup if no users exist.
 
-    Credentials:
-      Email:    admin@atlas.com
-      Password: AtlasAdmin1!
+    All credentials are read from Settings (config.py / .env).
+    Override them before first boot — never rely on the defaults in production.
 
-    IMPORTANT: Change these credentials immediately in production.
-    The password is logged at WARNING level on first run as a reminder.
+    Accounts created:
+      Admin     — full platform access
+      Analyst   — standard SOC operator
+      Read-Only — auditor / external view
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(AtlasUser))
         if result.scalars().first() is not None:
-            return   # Users already exist, skip seeding
-
-        import logging
-        logger = logging.getLogger(__name__)
+            return  # Users already exist — skip seeding
 
         admin = AtlasUser(
-            email="admin@atlas.com",
-            hashed_password=hash_password("AtlasAdmin1!"),
-            name="ATLAS Administrator",
+            email=settings.seed_admin_email,
+            hashed_password=hash_password(settings.seed_admin_password),
+            name=settings.seed_admin_name,
             role="Admin",
             is_active=True,
         )
         analyst = AtlasUser(
-            email="analyst@atlas.com",
-            hashed_password=hash_password("Analyst123!"),
-            name="Jane Doe",
+            email=settings.seed_analyst_email,
+            hashed_password=hash_password(settings.seed_analyst_password),
+            name=settings.seed_analyst_name,
             role="Analyst",
             is_active=True,
         )
         readonly = AtlasUser(
-            email="audit@atlas.com",
-            hashed_password=hash_password("ReadOnly123!"),
-            name="Auditor External",
+            email=settings.seed_readonly_email,
+            hashed_password=hash_password(settings.seed_readonly_password),
+            name=settings.seed_readonly_name,
             role="Read-Only",
             is_active=True,
             invite_pending=True,
@@ -200,9 +185,10 @@ async def seed_default_admin() -> None:
         logger.warning(
             "\n"
             "╔══════════════════════════════════════════════════════════════╗\n"
-            "║         ATLAS — DEFAULT ADMIN ACCOUNT CREATED                ║\n"
-            "║  Email:    admin@atlas.com                                   ║\n"
-            "║  Password: AtlasAdmin1!                                      ║\n"
-            "║  CHANGE THIS IMMEDIATELY IN PRODUCTION!                      ║\n"
+            "║         ATLAS — DEFAULT SEED ACCOUNTS CREATED                ║\n"
+            f"║  Admin:     {settings.seed_admin_email:<44}║\n"
+            f"║  Analyst:   {settings.seed_analyst_email:<44}║\n"
+            f"║  Read-Only: {settings.seed_readonly_email:<44}║\n"
+            "║  Override credentials in .env before first production boot!  ║\n"
             "╚══════════════════════════════════════════════════════════════╝"
         )

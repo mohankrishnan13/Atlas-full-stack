@@ -126,10 +126,10 @@ export default function NetworkTrafficPage() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
         <KpiCard 
-            label="Total Bandwidth" 
-            value={`${(safeBandwidth / 1024).toFixed(2)} Gbps`} 
-            subtitle="Live network throughput" 
-            color="green"
+            label="Network Bandwidth Utilisation" 
+            value={`${safeBandwidth}%`} 
+            subtitle="Current utilisation of total capacity" 
+            color={safeBandwidth > 80 ? 'red' : safeBandwidth > 60 ? 'orange' : 'green'}
         />
         <KpiCard 
             label="Active Connections" 

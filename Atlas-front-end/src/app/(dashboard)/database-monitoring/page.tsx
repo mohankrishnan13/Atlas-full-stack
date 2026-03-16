@@ -79,7 +79,8 @@ export default function DatabaseMonitoringPage() {
 
   const handleKillQuery = async (activityId: number, app: string, user: string) => {
     try {
-      await apiPost('/db-monitoring/kill-query', { activity_id: activityId, app_name: app, user_name: user });
+      // Payload matches backend DbKillQueryRequest schema: { activityId, app, user }
+      await apiPost('/db-monitoring/kill-query', { activityId, app, user });
       toast.success('Query Killed', { description: `Activity ${activityId} on ${app} has been terminated.` });
       fetchData(); // Refresh
     } catch (err) {

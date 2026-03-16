@@ -231,9 +231,9 @@ export default function EndpointSecurityPage() {
     }
 
     try {
+      // Payload matches backend QuarantineRequest schema: { workstationId: string }
       await apiPost('/endpoint-security/quarantine', {
-        workstation_id,
-        employee_name: employee
+        workstationId: workstation_id,
       });
 
       toast.success('Device Quarantined', {
