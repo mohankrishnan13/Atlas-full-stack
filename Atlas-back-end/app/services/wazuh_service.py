@@ -3,22 +3,24 @@ services/wazuh_service.py — Legacy Wazuh Polling Collector
 
 IMPORTANT — async concern
 ──────────────────────────
-This class uses `requests` (synchronous) inside an async context.  It is
-preserved here for compatibility with the existing main.py background task,
-but ALL new code should use `app.services.connectors.wazuh_client` instead,
-which is fully async (httpx) and avoids blocking the event loop.
+This class uses `requests` (synchronous) inside an async context.
+It is preserved only for compatibility with the existing background task.
 
-Security changes
-────────────────
-• Removed ALL hardcoded constructor defaults (host, user, password).
-• Settings are now read exclusively from get_settings() — credentials never
-  appear in source code.
-• WAZUH_VERIFY_SSL / WAZUH_CA_BUNDLE settings are honoured for SSL control.
+All new integrations should use the async connector client instead.
+
+Security guarantees
+──────────────────
+• No credentials are stored in source code
+• All connection settings come from environment variables
+• SSL verification is controlled via config.py
 """
+
+from __future__ import annotations
 
 import logging
 import requests
 import urllib3
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,137 +29,194 @@ from app.models.db_models import EndpointLog
 
 logger = logging.getLogger(__name__)
 
-class WazuhCollector:
-    """
-    Synchronous Wazuh polling collector.
 
-    All connection details are read from Settings (environment variables) at
-    construction time — no credentials are accepted as constructor arguments.
-    """
+class WazuhCollector:
+    """Legacy synchronous Wazuh polling collector."""
 
     def __init__(self) -> None:
-        settings = get_settings()
-        self.base_url: str = settings.wazuh_api_url.rstrip("/")
-        self._auth: tuple[str, str] = (settings.wazuh_username, settings.wazuh_password)
+        self.settings = get_settings()
+
+        # ── Wazuh API (manager)
+        self.api_url = self.settings.wazuh_api_url.rstrip("/")
+        self.api_auth = (
+            self.settings.wazuh_username,
+            self.settings.wazuh_password,
+        )
+
+        # ── Wazuh Indexer (alerts)
+        self.indexer_url = self.settings.wazuh_indexer_url.rstrip("/")
+        self.indexer_auth = (
+            self.settings.wazuh_indexer_username,
+            self.settings.wazuh_indexer_password,
+        )
+
+        self.alerts_index = self.settings.wazuh_alerts_index
+
         self.token: str | None = None
 
-        if settings.wazuh_verify_ssl:
-            self._verify: str | bool = settings.wazuh_ca_bundle or True
+        # ── SSL handling
+        if self.settings.wazuh_verify_ssl:
+            self.api_verify = self.settings.wazuh_ca_bundle or True
         else:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            self._verify = False
+            self.api_verify = False
 
-    # ── Authentication ────────────────────────────────────────────────────────
+        if self.settings.wazuh_indexer_verify_ssl:
+            self.indexer_verify = self.settings.wazuh_indexer_ca_bundle or True
+        else:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            self.indexer_verify = False
+
+    # ─────────────────────────────────────────────
+    # Wazuh API Authentication
+    # ─────────────────────────────────────────────
 
     def get_token(self) -> str | None:
-        """Authenticates with the Wazuh API and caches a short-lived JWT."""
+        """
+        Authenticates with Wazuh Manager API and returns JWT token.
+        """
         try:
             response = requests.get(
-                f"{self.base_url}/security/user/authenticate",
-                auth=self._auth,
-                verify=self._verify,
+                f"{self.api_url}/security/user/authenticate",
+                auth=self.api_auth,
+                verify=self.api_verify,
                 timeout=10,
             )
+
             response.raise_for_status()
+
             self.token = response.json().get("data", {}).get("token")
+
             return self.token
+
         except requests.exceptions.ConnectionError:
             logger.error(
-                "[WazuhCollector] Cannot connect to Wazuh Manager at %s. "
-                "Check WAZUH_API_URL and network connectivity.",
-                self.base_url,
+                "[WazuhCollector] Cannot connect to Wazuh API at %s",
+                self.api_url,
             )
+
         except Exception as exc:
-            logger.error("[WazuhCollector] Authentication failed: %s", exc)
+            logger.error(
+                "[WazuhCollector] API authentication failed: %s",
+                exc,
+            )
+
         return None
 
-    # ── Alert synchronisation ─────────────────────────────────────────────────
+    # ─────────────────────────────────────────────
+    # Alert polling
+    # ─────────────────────────────────────────────
 
     async def sync_alerts(self, db: AsyncSession) -> None:
         """
-        Polls the Wazuh OpenSearch Indexer (Port 9200) for real security alerts.
+        Fetches alerts from Wazuh Indexer and stores them in ATLAS database.
         """
-        # 1. Update the URL to point to the Indexer (Port 9200)
-        # Note: Replace self.base_url parsing if needed, or hardcode your LAN IP for the demo
-        # Assuming your laptop IP is 10.10.5.142
-        indexer_url = "https://10.10.5.142:9200/wazuh-alerts-*/_search"
-        
-        # OpenSearch usually defaults to 'admin' and your custom password
-        auth = ("admin", self._auth[1]) 
 
-        # We ask OpenSearch for the 20 newest alerts
+        search_url = f"{self.indexer_url}/{self.alerts_index}/_search"
+
         query = {
             "size": 20,
             "sort": [{"timestamp": {"order": "desc"}}],
             "query": {
                 "range": {
-                    "rule.level": {"gte": 3} # Only fetch actual threats (Level 3+)
+                    "rule.level": {"gte": 3}
                 }
-            }
+            },
         }
 
         try:
             response = requests.post(
-                indexer_url,
-                auth=auth,
+                search_url,
+                auth=self.indexer_auth,
                 json=query,
-                verify=self._verify,
+                verify=self.indexer_verify,
                 timeout=10,
             )
+
             response.raise_for_status()
-            
-            # OpenSearch nests data inside hits -> hits -> _source
-            data = response.json()
-            alerts = [hit["_source"] for hit in data.get("hits", {}).get("hits", [])]
-            
+
+            payload = response.json()
+
+            alerts = [
+                hit["_source"]
+                for hit in payload.get("hits", {}).get("hits", [])
+            ]
+
         except Exception as exc:
-            logger.error("[WazuhCollector] Failed to fetch alerts from Indexer on port 9200: %s", exc)
+            logger.error(
+                "[WazuhCollector] Failed to fetch alerts from Indexer: %s",
+                exc,
+            )
             return
 
-        new_records_count = 0
+        new_records = 0
+
         for alert in alerts:
+            timestamp = alert.get("timestamp")
+
+            if not timestamp:
+                continue
+
             stmt = (
                 select(EndpointLog)
-                .where(EndpointLog.timestamp == alert.get("timestamp"))
+                .where(EndpointLog.timestamp == timestamp)
                 .limit(1)
             )
+
             result = await db.execute(stmt)
+
             if result.scalar_one_or_none():
                 continue
 
             agent_data = alert.get("agent", {})
             rule_data = alert.get("rule", {})
-            
-            # OpenSearch alert structure might slightly differ, adapt as needed
+
             new_log = EndpointLog(
-                env="cloud", # Ensure this matches your frontend toggle
-                workstation_id=agent_data.get("name", "Unknown-Host"),
-                employee="system", # Simplify user mapping for now
-                alert_message=rule_data.get("description", "Wazuh Security Alert"),
+                env="cloud",
+                workstation_id=agent_data.get("name", "unknown-host"),
+                employee="system",
+                alert_message=rule_data.get(
+                    "description",
+                    "Wazuh Security Alert",
+                ),
                 alert_category=(rule_data.get("groups") or ["security"])[0],
                 severity=self._map_wazuh_level(rule_data.get("level", 0)),
                 os_name=agent_data.get("os", {}).get("name", "Managed Agent"),
                 is_malware=rule_data.get("level", 0) >= 10,
                 is_offline=False,
-                timestamp=alert.get("timestamp", ""),
+                timestamp=timestamp,
                 raw_payload=alert,
             )
-            db.add(new_log)
-            new_records_count += 1
 
-        if new_records_count > 0:
+            db.add(new_log)
+
+            new_records += 1
+
+        if new_records:
             await db.commit()
+
             logger.info(
-                "[WazuhCollector] Synced %d new real alerts from Wazuh Indexer.", new_records_count
+                "[WazuhCollector] Synced %d new alerts from Wazuh Indexer",
+                new_records,
             )
+
+    # ─────────────────────────────────────────────
+    # Severity mapping
+    # ─────────────────────────────────────────────
 
     @staticmethod
     def _map_wazuh_level(level: int) -> str:
-        """Translates Wazuh's 0–15 rule level scale to ATLAS severity vocabulary."""
+        """
+        Converts Wazuh rule level (0-15) to ATLAS severity scale.
+        """
+
         if level >= 12:
             return "Critical"
+
         if level >= 7:
             return "High"
+
         if level >= 4:
             return "Medium"
+
         return "Low"
