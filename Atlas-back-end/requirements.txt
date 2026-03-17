@@ -5,6 +5,9 @@
 # ── Web Framework ─────────────────────────────────────────────────────────────
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
+numpy
+pandas
+requests
 
 # ── Data Validation & Settings ────────────────────────────────────────────────
 pydantic==2.7.1
@@ -17,6 +20,8 @@ asyncpg==0.29.0
 sqlalchemy[asyncio]==2.0.30
 # psycopg2 is needed only for Alembic migrations (sync)
 psycopg2-binary==2.9.9
+sqlalchemy
+python-dotenv
 
 # ── Database Migrations ───────────────────────────────────────────────────────
 alembic==1.13.1
