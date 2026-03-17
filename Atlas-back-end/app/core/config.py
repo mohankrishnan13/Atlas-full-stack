@@ -38,6 +38,10 @@ from typing import List
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from dotenv import load_dotenv
+from pathlib import Path
+
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 # ─── Sentinel detection ───────────────────────────────────────────────────────
 # Values in this set are rejected at startup so that placeholder strings from
