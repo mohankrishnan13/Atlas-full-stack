@@ -241,7 +241,7 @@ async def sync_alerts(db: AsyncSession, limit: int = 20) -> int:
 
         try:
             res = await client.get(
-                f"{get_settings().wazuh_api_url}/alerts",
+                f"{get_settings().wazuh_api_url}/security/alerts",
                 headers={"Authorization": f"Bearer {token}"},
                 params={"limit": limit, "sort": "-timestamp"},
             )

@@ -22,6 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal, get_db
 from app.models.db_models import AtlasUser, UserSession
+import logging
+from sqlalchemy.exc import IntegrityError
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -143,17 +148,10 @@ async def seed_default_admin() -> None:
 
     All credentials are read from Settings (config.py / .env).
     Override them before first boot — never rely on the defaults in production.
-
-    Accounts created:
-      Admin     — full platform access
-      Analyst   — standard SOC operator
-      Read-Only — auditor / external view
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
     async with AsyncSessionLocal() as db:
-        result = await db.execute(select(AtlasUser))
+        # 1. Efficiently check if ANY user exists (Added .limit(1) for speed)
+        result = await db.execute(select(AtlasUser).limit(1))
         if result.scalars().first() is not None:
             return  # Users already exist — skip seeding
 
@@ -179,11 +177,19 @@ async def seed_default_admin() -> None:
             is_active=True,
             invite_pending=True,
         )
-        db.add_all([admin, analyst, readonly])
-        await db.commit()
+        
+        # 2. Safely attempt to insert, catching race conditions
+        try:
+            db.add_all([admin, analyst, readonly])
+            await db.commit()
+        except IntegrityError:
+            # If another worker process beat us to the insert, rollback and exit gracefully
+            await db.rollback()
+            logger.info("Seed accounts already created by another worker process. Skipping.")
+            return
 
+        # 3. Log the successful creation
         inner = 60  # width between the two ║ characters
-
         logger.warning(
             "\n"
             f"╔{'═'*inner}╗\n"

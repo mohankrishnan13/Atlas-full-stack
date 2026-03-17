@@ -2,20 +2,20 @@
 main.py — ATLAS FastAPI Application
 
 Startup sequence (lifespan):
-  1. create_all_tables()          — idempotent DDL sync
+  1. Alembic migrations           — executed in Docker startup
   2. seed_default_admin()         — only runs when atlas_users is empty
   3. seed_applications_config()   — seeds Applications / Microservices / AppConfigs
   4. ingest_all_logs()            — JSONL → PostgreSQL  (if startup_run_log_ingest=True)
   5. warm_cache()                 — CSVs → Pandas RAM   (if startup_warm_pandas_cache=True)
+  6. start_wazuh_sync()           — background Wazuh poll task (runs every 5 min)
 
 Flags 4 and 5 are independently controlled via Settings so CI, tests,
 and production environments can skip whichever steps are unnecessary.
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
-import asyncio
-from app.services.wazuh_service import WazuhCollector 
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,14 +23,18 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.core.config import get_settings
-from app.core.database import AsyncSessionLocal, close_db, create_all_tables
+from app.core.database import AsyncSessionLocal, close_db
 from app.services.auth_service import seed_default_admin
 from app.services.query_service import warm_cache, _invalidate_cache
+from app.services.wazuh_service import WazuhCollector
 
 from app.api.routes_auth import router as auth_router
 from app.api.routes_dashboard import router as dashboard_router
 from app.api.routes_settings import router as settings_router
 from app.api.routes_actions import router as actions_router
+from sqlalchemy.exc import IntegrityError, ProgrammingError
+from sqlalchemy import select
+from app.models.db_models import Application, AppConfig, Microservice
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,11 +50,10 @@ settings = get_settings()
 async def _seed_applications_config() -> None:
     """
     Seeds Applications, Microservices, and AppConfigs for every env.
-    Idempotent — rows are only inserted if they don't already exist.
-    Applications and app-ids are derived from Settings so they stay
-    consistent with what query_service / the frontend expect.
+    Idempotent — safely handles race conditions in multi-worker environments.
     """
-    from sqlalchemy import select
+    # Note: It's generally better to put these imports at the top of the file, 
+    # but if they are here to avoid circular imports, leave them.
     from app.models.db_models import Application, AppConfig, Microservice
 
     _APPS = [
@@ -62,51 +65,102 @@ async def _seed_applications_config() -> None:
 
     _MICROSERVICES = [
         # (service_id, name, status, top, left, connections_csv)
-        ("api",           "API-Gateway",           "Healthy", "40%", "75%", "auth,payment,notifications"),
-        ("auth",          "Auth-Service",           "Healthy", "20%", "25%", "api"),
-        ("payment",       "Payment-Service",        "Healthy", "50%", "50%", "api"),
-        ("notifications", "Notification-Service",   "Healthy", "70%", "25%", "api"),
+        ("api",           "API-Gateway",          "Healthy", "40%", "75%", "auth,payment,notifications"),
+        ("auth",          "Auth-Service",          "Healthy", "20%", "25%", "api"),
+        ("payment",       "Payment-Service",       "Healthy", "50%", "50%", "api"),
+        ("notifications", "Notification-Service",  "Healthy", "70%", "25%", "api"),
     ]
 
     async with AsyncSessionLocal() as db:
-        for env in ("cloud", "local"):
-            # ── Applications ──────────────────────────────────────────────────
-            for app_id, name in _APPS:
-                exists = (await db.execute(
-                    select(Application).where(
-                        Application.env == env,
-                        Application.app_id == app_id,
-                    )
+        try:
+            for env in ("cloud", "local"):
+                # ── 1. Applications ──
+                for app_id, name in _APPS:
+                    exists = (await db.execute(
+                        select(Application).where(
+                            Application.env == env,
+                            Application.app_id == app_id,
+                        )
+                    )).scalar_one_or_none()
+                    if not exists:
+                        db.add(Application(env=env, app_id=app_id, name=name))
+
+                # ── 2. Microservices ──
+                has_ms = (await db.execute(
+                    select(Microservice).where(Microservice.env == env).limit(1)
                 )).scalar_one_or_none()
-                if not exists:
-                    db.add(Application(env=env, app_id=app_id, name=name))
+                
+                if not has_ms:
+                    for sid, name, status, top, left, conns in _MICROSERVICES:
+                        db.add(Microservice(
+                            env=env, service_id=sid, name=name,
+                            status=status, position_top=top,
+                            position_left=left, connections_csv=conns,
+                        ))
 
-            # ── Microservices ─────────────────────────────────────────────────
-            has_ms = (await db.execute(
-                select(Microservice).where(Microservice.env == env).limit(1)
-            )).scalar_one_or_none()
-            if not has_ms:
-                for sid, name, status, top, left, conns in _MICROSERVICES:
-                    db.add(Microservice(
-                        env=env, service_id=sid, name=name,
-                        status=status, position_top=top,
-                        position_left=left, connections_csv=conns,
-                    ))
+                # ── 3. AppConfigs ──
+                for app_id, _ in _APPS:
+                    if app_id == "all":
+                        continue
+                    exists = (await db.execute(
+                        select(AppConfig).where(
+                            AppConfig.env == env,
+                            AppConfig.app_id == app_id,
+                        )
+                    )).scalar_one_or_none()
+                    if not exists:
+                        db.add(AppConfig(env=env, app_id=app_id))
 
-            # ── AppConfigs ────────────────────────────────────────────────────
-            for app_id, _ in _APPS:
-                if app_id == "all":
-                    continue
-                exists = (await db.execute(
-                    select(AppConfig).where(
-                        AppConfig.env == env,
-                        AppConfig.app_id == app_id,
-                    )
-                )).scalar_one_or_none()
-                if not exists:
-                    db.add(AppConfig(env=env, app_id=app_id))
+            # Attempt to save all changes
+            await db.commit()
 
-        await db.commit()
+        except IntegrityError:
+            # Another worker beat us to the database insert. Rollback and move on.
+            await db.rollback()
+            logger.info("Application config seed skipped: Data already inserted by another worker.")
+            
+        except ProgrammingError:
+            # The database tables haven't been created yet. Rollback and move on.
+            await db.rollback()
+            logger.warning("Database tables not ready. Skipping application config seed.")
+            
+        except Exception as e:
+            # Catch-all for any other unexpected errors
+            await db.rollback()
+            logger.error(f"Unexpected error during application config seed: {e}")
+
+
+# ─── Wazuh background task ────────────────────────────────────────────────────
+
+async def _start_wazuh_sync() -> None:
+    """
+    Background coroutine that polls Wazuh every 5 minutes for new alerts.
+
+    Connection details (URL, username, password) are read from Settings —
+    no credentials are embedded in this function.
+
+    NOTE: WazuhCollector uses synchronous `requests` internally.  For
+    high-throughput deployments, replace this with
+    `app.services.connectors.wazuh_client.sync_alerts()`, which uses httpx
+    and does not block the event loop.
+    """
+    collector = WazuhCollector()   # ← credentials come from Settings / .env
+
+    while True:
+        try:
+            logger.info("[WazuhSync] Polling Wazuh Manager for new alerts ...")
+            async with AsyncSessionLocal() as db:
+                await collector.sync_alerts(db)
+            _invalidate_cache()
+            warm_cache()
+            logger.info("[WazuhSync] Sync complete — dashboard cache refreshed.")
+        except asyncio.CancelledError:
+            logger.info("[WazuhSync] Background task cancelled — shutting down.")
+            raise
+        except Exception as exc:
+            logger.error("[WazuhSync] Error during sync: %s", exc, exc_info=True)
+
+        await asyncio.sleep(300)  # 5-minute polling interval
 
 
 # ─── Application Lifespan ─────────────────────────────────────────────────────
@@ -115,8 +169,8 @@ async def _seed_applications_config() -> None:
 async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app_name} (env: {settings.app_env}) ...")
 
-    # 1. DDL sync
-    await create_all_tables()
+    # 1. Database tables are now managed by Alembic migrations
+    #    Migrations will be run via entrypoint.sh before Uvicorn starts
 
     # 2. Seed user accounts
     try:
@@ -162,14 +216,21 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("startup_warm_pandas_cache=False — skipping Pandas warm.")
 
+    # 6. Start background Wazuh poll task
+    wazuh_task = asyncio.create_task(_start_wazuh_sync())
     logger.info(
         f"{settings.app_name} startup complete.  "
-        f"Docs: http://localhost:8000/docs"
+        f"Wazuh sync active.  Docs: http://localhost:8000/docs"
     )
 
     yield  # ── Application is running ──────────────────────────────────────
 
     logger.info("Shutting down ATLAS ...")
+    wazuh_task.cancel()
+    try:
+        await wazuh_task
+    except asyncio.CancelledError:
+        pass
     await close_db()
     logger.info("Database connection pool closed.  Shutdown complete.")
 
@@ -258,7 +319,7 @@ async def admin_reload_cache():
     from disk — otherwise calls within the TTL window are no-ops.
     """
     try:
-        _invalidate_cache()   # bust TTL so warm_cache re-reads disk
+        _invalidate_cache()
         warm_cache()
         return {"status": "success", "message": "Pandas in-memory cache reloaded."}
     except Exception as exc:
@@ -267,40 +328,3 @@ async def admin_reload_cache():
             status_code=500,
             content={"status": "error", "detail": str(exc)},
         )
-
-async def start_wazuh_sync():
-    """Background task to poll Wazuh every 30 seconds."""
-    collector = WazuhCollector(host="127.0.0.1") # Point to your laptop's IP
-    while True:
-        try:
-            logger.info("Polling Wazuh Manager for new alerts...")
-            async with AsyncSessionLocal() as db:
-                await collector.sync_alerts(db)
-            
-            # After syncing DB, refresh the Pandas cache so charts update
-            _invalidate_cache()
-            warm_cache()
-            
-            logger.info("Wazuh sync complete. Dashboard updated.")
-        except Exception as e:
-            logger.error(f"Wazuh Sync Error: {e}")
-        
-        await asyncio.sleep(300) # Wait 300 seconds (5 minutes) before next poll
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # ... 1. DDL sync ...
-    # ... 2. Seed admin ...
-    # ... 3. Seed apps ...
-
-    # 4. Start the Wazuh Background Task
-    # This runs 'in the background' without blocking the API start
-    wazuh_task = asyncio.create_task(start_wazuh_sync())
-
-    logger.info("ATLAS is live with real Wazuh data streaming.")
-
-    yield  # ── Application is running ──────────────────────────────────────
-
-    # Cleanup
-    wazuh_task.cancel()
-    await close_db()
