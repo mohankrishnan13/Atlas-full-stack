@@ -89,7 +89,7 @@ class WazuhCollector:
 
             return self.token
 
-        except requests.exceptions.ConnectionError:
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
             logger.error(
                 "[WazuhCollector] Cannot connect to Wazuh API at %s",
                 self.api_url,
@@ -142,6 +142,9 @@ class WazuhCollector:
                 for hit in payload.get("hits", {}).get("hits", [])
             ]
 
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            logger.error("[WazuhCollector] Failed to fetch alerts from Indexer: Connection timed out.")
+            return
         except Exception as exc:
             logger.error(
                 "[WazuhCollector] Failed to fetch alerts from Indexer: %s",

@@ -173,16 +173,10 @@ async def lifespan(app: FastAPI):
     #    Migrations will be run via entrypoint.sh before Uvicorn starts
 
     # 2. Seed user accounts
-    try:
-        await seed_default_admin()
-    except Exception as exc:
-        logger.error(f"Admin seed failed: {exc}", exc_info=True)
+    await seed_default_admin()
 
     # 3. Seed applications / microservices / app configs
-    try:
-        await _seed_applications_config()
-    except Exception as exc:
-        logger.error(f"Applications/config seed failed: {exc}", exc_info=True)
+    await _seed_applications_config()
 
     # 4. JSONL → PostgreSQL ingest  (controlled by startup_run_log_ingest)
     if settings.startup_run_log_ingest:

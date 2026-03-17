@@ -108,32 +108,36 @@ async def _fetch_endpoint_rows(env: str, db: AsyncSession) -> list[dict]:
     produced as DataFrame columns, so _build_wazuh_events() and
     _build_alert_types() work against the same shape.
     """
-    result = await db.execute(
-        select(EndpointLog)
-        .where(EndpointLog.env == env)
-        .order_by(EndpointLog.id.desc())
-        .limit(200)
-    )
-    rows = result.scalars().all()
-    if not rows:
-        return []
+    try:
+        result = await db.execute(
+            select(EndpointLog)
+            .where(EndpointLog.env == env)
+            .order_by(EndpointLog.id.desc())
+            .limit(200)
+        )
+        rows = result.scalars().all()
+        if not rows:
+            return []
 
-    now_iso = datetime.now(timezone.utc).isoformat()
-    return [
-        {
-            "workstation_id": r.workstation_id or "Unknown",
-            "employee":       r.employee       or "System",
-            "avatar":         r.avatar         or "",
-            "alert_message":  r.alert_message  or "Wazuh Alert",
-            "alert_category": r.alert_category or "Security",
-            "os_name":        r.os_name        or "Managed Agent",
-            "is_offline":     bool(r.is_offline),
-            "is_malware":     bool(r.is_malware),
-            "severity":       r.severity       or "Medium",
-            "timestamp":      r.timestamp      or now_iso,
-        }
-        for r in rows
-    ]
+        now_iso = datetime.now(timezone.utc).isoformat()
+        return [
+            {
+                "workstation_id": r.workstation_id or "Unknown",
+                "employee":       r.employee       or "System",
+                "avatar":         r.avatar         or "",
+                "alert_message":  r.alert_message  or "Wazuh Alert",
+                "alert_category": r.alert_category or "Security",
+                "os_name":        r.os_name        or "Managed Agent",
+                "is_offline":     bool(r.is_offline),
+                "is_malware":     bool(r.is_malware),
+                "severity":       r.severity       or "Medium",
+                "timestamp":      r.timestamp      or now_iso,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error(f"Error fetching endpoint rows: {e}", exc_info=True)
+        return []
 
 
 def _build_os_distribution(agents: list[dict]) -> tuple[int, int, list[OsDistribution]]:

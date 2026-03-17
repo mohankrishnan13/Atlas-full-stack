@@ -76,7 +76,7 @@ services:
       - "8000:8000"     # FastAPI + Swagger UI at http://localhost:8000/docs
     env_file:
       - .env
-
+    entrypoint: ["/app/entrypoint.sh"]
     volumes:
       # Log files are read-only from the host so you can edit sample data
       # without rebuilding the container.

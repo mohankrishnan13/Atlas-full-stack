@@ -23,7 +23,7 @@ from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal, get_db
 from app.models.db_models import AtlasUser, UserSession
 import logging
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -150,53 +150,60 @@ async def seed_default_admin() -> None:
     Override them before first boot — never rely on the defaults in production.
     """
     async with AsyncSessionLocal() as db:
-        # 1. Efficiently check if ANY user exists (Added .limit(1) for speed)
-        result = await db.execute(select(AtlasUser).limit(1))
-        if result.scalars().first() is not None:
-            return  # Users already exist — skip seeding
-
-        admin = AtlasUser(
-            email=settings.seed_admin_email,
-            hashed_password=hash_password(settings.seed_admin_password),
-            name=settings.seed_admin_name,
-            role="Admin",
-            is_active=True,
-        )
-        analyst = AtlasUser(
-            email=settings.seed_analyst_email,
-            hashed_password=hash_password(settings.seed_analyst_password),
-            name=settings.seed_analyst_name,
-            role="Analyst",
-            is_active=True,
-        )
-        readonly = AtlasUser(
-            email=settings.seed_readonly_email,
-            hashed_password=hash_password(settings.seed_readonly_password),
-            name=settings.seed_readonly_name,
-            role="Read-Only",
-            is_active=True,
-            invite_pending=True,
-        )
-        
-        # 2. Safely attempt to insert, catching race conditions
         try:
+            # 1. Efficiently check if ANY user exists (Added .limit(1) for speed)
+            result = await db.execute(select(AtlasUser).limit(1))
+            if result.scalars().first() is not None:
+                return  # Users already exist — skip seeding
+
+            admin = AtlasUser(
+                email=settings.seed_admin_email,
+                hashed_password=hash_password(settings.seed_admin_password),
+                name=settings.seed_admin_name,
+                role="Admin",
+                is_active=True,
+            )
+            analyst = AtlasUser(
+                email=settings.seed_analyst_email,
+                hashed_password=hash_password(settings.seed_analyst_password),
+                name=settings.seed_analyst_name,
+                role="Analyst",
+                is_active=True,
+            )
+            readonly = AtlasUser(
+                email=settings.seed_readonly_email,
+                hashed_password=hash_password(settings.seed_readonly_password),
+                name=settings.seed_readonly_name,
+                role="Read-Only",
+                is_active=True,
+                invite_pending=True,
+            )
+            
+            # 2. Safely attempt to insert, catching race conditions
             db.add_all([admin, analyst, readonly])
             await db.commit()
+
+            # 3. Log the successful creation
+            inner = 60  # width between the two ║ characters
+            logger.warning(
+                "\n"
+                f"╔{'═'*inner}╗\n"
+                f"║{'ATLAS — DEFAULT SEED ACCOUNTS CREATED':^{inner}}║\n"
+                f"║{'Admin:     ' + settings.seed_admin_email:<{inner}}║\n"
+                f"║{'Analyst:   ' + settings.seed_analyst_email:<{inner}}║\n"
+                f"║{'Read-Only: ' + settings.seed_readonly_email:<{inner}}║\n"
+                f"║{'Override credentials in .env before first production boot!':<{inner}}║\n"
+                f"╚{'═'*inner}╝"
+            )
         except IntegrityError:
             # If another worker process beat us to the insert, rollback and exit gracefully
             await db.rollback()
             logger.info("Seed accounts already created by another worker process. Skipping.")
-            return
-
-        # 3. Log the successful creation
-        inner = 60  # width between the two ║ characters
-        logger.warning(
-            "\n"
-            f"╔{'═'*inner}╗\n"
-            f"║{'ATLAS — DEFAULT SEED ACCOUNTS CREATED':^{inner}}║\n"
-            f"║{'Admin:     ' + settings.seed_admin_email:<{inner}}║\n"
-            f"║{'Analyst:   ' + settings.seed_analyst_email:<{inner}}║\n"
-            f"║{'Read-Only: ' + settings.seed_readonly_email:<{inner}}║\n"
-            f"║{'Override credentials in .env before first production boot!':<{inner}}║\n"
-            f"╚{'═'*inner}╝"
-        )
+        except ProgrammingError:
+            # The database tables haven't been created yet. Rollback and move on.
+            await db.rollback()
+            logger.warning("Database tables not ready. Skipping admin seed.")
+        except Exception as e:
+            # Catch-all for any other unexpected errors
+            await db.rollback()
+            logger.error(f"Unexpected error during admin seed: {e}")

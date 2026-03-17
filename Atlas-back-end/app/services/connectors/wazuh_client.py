@@ -118,7 +118,7 @@ async def _get_token(client: httpx.AsyncClient) -> Optional[str]:
         else:
             logger.error("[WazuhClient] Authenticate response contained no token.")
         return token
-    except httpx.TimeoutException:
+    except (httpx.TimeoutException, httpx.ConnectError):
         logger.error("[WazuhClient] Authentication timed out.")
     except httpx.HTTPStatusError as exc:
         logger.error(
@@ -191,7 +191,7 @@ async def fetch_agents() -> list[dict]:
             logger.debug(f"[WazuhClient] Fetched {len(agents)} agents.")
             return agents
 
-        except httpx.TimeoutException:
+        except (httpx.TimeoutException, httpx.ConnectError):
             logger.error("[WazuhClient] fetch_agents timed out.")
         except httpx.HTTPStatusError as exc:
             logger.error(
@@ -249,7 +249,7 @@ async def sync_alerts(db: AsyncSession, limit: int = 20) -> int:
             alerts: list[dict] = (
                 res.json().get("data", {}).get("affected_items", [])
             )
-        except httpx.TimeoutException:
+        except (httpx.TimeoutException, httpx.ConnectError):
             logger.error("[WazuhClient] sync_alerts fetch timed out.")
             return 0
         except httpx.HTTPStatusError as exc:
