@@ -32,13 +32,10 @@ import {
 import { cn, getSeverityClassNames } from '@/lib/utils';
 
 const PAGE_TITLES: Record<string, string> = {
-  '/overview': 'Overview',
-  '/api-monitoring': 'API Monitoring',
+  '/overview': 'Anomaly Command Center',
   '/network-traffic': 'Network Traffic',
   '/endpoint-security': 'Endpoint Security',
-  '/database-monitoring': 'Database Monitoring',
   '/incidents': 'Case Management',
-  '/reports': 'Reports',
   '/settings': 'Settings',
 };
 
