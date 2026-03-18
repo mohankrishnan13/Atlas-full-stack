@@ -11,7 +11,11 @@ from app.core.database import get_db
 from app.models.db_models import AtlasUser
 from app.services.auth_service import get_current_user
 from app.models.schemas import AppConfigResponse, AppConfigUpdateRequest, QuarantinedEndpointsResponse
-from app.services import query_service
+from app.services.query import (
+    get_app_config,
+    update_app_config,
+    get_quarantined_endpoints,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/settings", tags=["ATLAS Settings (Config)"])
@@ -24,7 +28,7 @@ async def get_app_config(
 ) -> AppConfigResponse:
     if not app_id:
         raise HTTPException(status_code=400, detail="app_id is required")
-    return await query_service.get_app_config(current_user.env, app_id, db)
+    return await get_app_config(current_user.env, app_id, db)
 
 @router.put("/apps/{app_id}", response_model=AppConfigResponse)
 async def update_app_config(
@@ -36,7 +40,7 @@ async def update_app_config(
     if not app_id:
         raise HTTPException(status_code=400, detail="app_id is required")
     logger.info(f"[SETTINGS] AppConfig update by {current_user.email} env={current_user.env} app_id={app_id}")
-    return await query_service.update_app_config(current_user.env, app_id, body, db)
+    return await update_app_config(current_user.env, app_id, body, db)
 
 @router.get("/apps/{app_id}/quarantine", response_model=QuarantinedEndpointsResponse)
 async def get_quarantined(
@@ -46,4 +50,4 @@ async def get_quarantined(
 ) -> QuarantinedEndpointsResponse:
     if not app_id:
         raise HTTPException(status_code=400, detail="app_id is required")
-    return await query_service.get_quarantined_endpoints(current_user.env, app_id, db)
+    return await get_quarantined_endpoints(current_user.env, app_id, db)

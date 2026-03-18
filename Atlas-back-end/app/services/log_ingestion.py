@@ -16,7 +16,7 @@ PostgreSQL for stateful data) and gains two new capabilities:
 2. Dynamic Severity Mapping  — _map_csv_level_to_severity() maps raw log
    level strings from any Loghub CSV (FATAL, ERROR, WARN, INFO, DEBUG,
    notice, error, emerg, …) to the standardised severity values used by the
-   Pydantic schemas and the query_service: Critical / High / Medium / Low / Info.
+   Pydantic schemas and the new modular services: Critical / High / Medium / Low / Info.
 
 JSONL ingestion (Steps 1-7 in ingest_all_logs) is unchanged — PostgreSQL
 tables for network_logs, api_logs, endpoint_logs, etc. are still populated
@@ -56,7 +56,7 @@ from app.models.db_models import (
 
 logger = logging.getLogger(__name__)
 
-# ─── Path constant (mirrors query_service._LOG_ROOT) ──────────────────────────
+# ─── Path constant (mirrors log_loader.py structure) ──────────────────────────
 _LOG_ROOT = Path(__file__).resolve().parent.parent.parent / "data" / "logs"
 
 
@@ -387,7 +387,7 @@ async def ingest_loghub_csvs(
 
     This is called AFTER the standard JSONL ingestion so JSONL records always
     take precedence in the stateful PostgreSQL layer; the CSVs supplement the
-    Pandas in-memory layer (via query_service._build_*_df).
+    Pandas in-memory layer (via log_loader.py).
 
     To trigger CSV ingestion on startup add this after ingest_all_logs():
         await ingest_loghub_csvs(db)

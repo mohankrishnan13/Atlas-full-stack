@@ -19,7 +19,7 @@ Step 3 │ KEEPALIVE PADDING
 Pydantic contracts preserved
 ─────────────────────────────
 The returned `EndpointSecurityData` schema is identical to the one assembled
-in the old query_service.get_endpoint_security() — the frontend sees no diff.
+in the old monolithic query_service.get_endpoint_security() — the frontend sees no diff.
 
 Pandas removed from this path
 ──────────────────────────────

@@ -17,7 +17,7 @@ the frontend — no schema changes, zero frontend impact.
 
 Pandas reduction
 ────────────────
-The original query_service.py had no Pandas in this section — all functions
+The original monolithic query_service.py had no Pandas in this section — all functions
 were already pure SQLAlchemy.  This module is a faithful extraction with one
 addition: _parse_iso() is module-scoped (was a nested def inside
 get_case_management) so it is testable in isolation.

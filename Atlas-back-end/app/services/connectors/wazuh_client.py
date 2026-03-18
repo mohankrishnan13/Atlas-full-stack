@@ -2,7 +2,7 @@
 connectors/wazuh_client.py — Async Wazuh Manager API Client
 
 Supersedes:
-  - _fetch_live_wazuh_agents()   in services/query_service.py  (blocking)
+  - _fetch_live_wazuh_agents()   in the old monolithic services/query_service.py  (blocking)
   - class WazuhCollector         in services/wazuh_service.py  (blocking inside async)
 
 Root problem with the old code

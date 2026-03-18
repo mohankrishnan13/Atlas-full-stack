@@ -5,8 +5,8 @@ Every action endpoint:
   1. Executes the mitigation (Wazuh active response or DB operation).
   2. Persists a MitigationAuditLog row so there is a permanent, queryable
      record of every analyst action — who did what, when, and against what.
-  3. On remediate with status "Closed", stamps Incident.resolved_at so the
-     MTTR calculation in query_service has real timestamps to work with.
+  3. On remediate with status "Closed", stamps Incident.resolved_at so that
+     MTTR calculation in the new modular services has real timestamps to work with.
 
 Security changes
 ────────────────
@@ -32,7 +32,11 @@ from app.models.schemas import (
     NetworkBlockRequest, QuarantineRequest, QuarantineResponse,
     RemediateRequest, RemediateResponse,
 )
-from app.services import query_service
+from app.services.query import (
+    generate_report,
+    lift_quarantine,
+    update_incident_status,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ATLAS Mitigation Actions (Write)"])
@@ -159,7 +163,7 @@ async def lift_quarantine(
         f"[QUARANTINE LIFT] Requested by {current_user.email} "
         f"env={current_user.env} app_id={app_id} ws={body.workstationId}"
     )
-    result = await query_service.lift_quarantine(
+    result = await lift_quarantine(
         current_user.env, app_id, body.workstationId, db
     )
     await _audit(
@@ -220,7 +224,7 @@ async def remediate_incident(
     new_status = _STATUS_MAP.get(payload.action)
 
     if new_status:
-        await query_service.update_incident_status(payload.incidentId, new_status, db)
+        await update_incident_status(payload.incidentId, new_status, db)
 
         if payload.action == "Isolate Endpoint":
             result = await db.execute(
@@ -278,7 +282,7 @@ async def generate_report(
     logger.info(
         f"[REPORTS] Generate requested by {current_user.email} for {body.dataSource}"
     )
-    result = await query_service.generate_report(current_user.env, body, db)
+    result = await generate_report(current_user.env, body, db)
     await _audit(
         db, current_user,
         action_type="generate_report",

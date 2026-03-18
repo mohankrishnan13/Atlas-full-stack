@@ -2,7 +2,7 @@
 services/constants.py — Centralised Domain Constants
 
 Single source of truth for every hardcoded list, mapping, and chart-colour
-token previously scattered across query_service.py.
+token previously scattered across the old monolithic query_service.py.
 
 Rules for this module
 ─────────────────────
@@ -12,7 +12,6 @@ Rules for this module
   never mutated at runtime.
 • Names are exported without the leading underscore so they read cleanly at
   call-sites:  `from app.services.constants import CHART_FILLS`
-  vs.          `from app.services.query_service import _CHART_FILLS`
 
 Adding new constants
 ────────────────────

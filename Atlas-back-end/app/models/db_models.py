@@ -10,10 +10,10 @@ Architecture:
        S3IngestCursor, MitigationAuditLog
 
   B) Telemetry write-store (written by log_ingestion + ingest_loghub,
-     read by Pandas / query_service for hot-path dashboard queries):
+     read by Pandas / log_loader for hot-path dashboard queries):
        NetworkLog, ApiLog, EndpointLog, DbActivityLog, Alert
 
-  The Pandas in-memory engine (query_service._build_*_df) reads from
+  The Pandas in-memory engine (log_loader.py) reads from
   CSV files at startup — PostgreSQL telemetry tables serve as the
   cold audit/replay store and are never directly queried by the
   dashboard route handlers.

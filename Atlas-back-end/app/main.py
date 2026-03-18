@@ -125,6 +125,10 @@ async def _start_wazuh_sync() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app_name} (env: {settings.app_env}) ...")
+    
+    # Database tables are now created by init_db.py before Uvicorn starts
+    # This eliminates race conditions and UndefinedTableError issues
+    
     try:
         await seed_default_admin()
         await _seed_applications_config()
