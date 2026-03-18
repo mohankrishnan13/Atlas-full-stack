@@ -147,7 +147,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ATLAS — Advanced Traffic Layer Anomaly System",
-    description="Enterprise SOC Dashboard backend powered by FastAPI + PostgreSQL.",n    version="2.0.0",
+    description="Enterprise SOC Dashboard backend powered by FastAPI + PostgreSQL.",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
