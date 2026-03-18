@@ -4,8 +4,7 @@ main.py — ATLAS FastAPI Application
 Startup sequence (lifespan):
   1. seed_default_admin()         — Safely attempts to seed admin (skips if tables missing/exist)
   2. seed_applications_config()   — Safely attempts to seed Apps/Microservices
-  3. warm_cache()                 — Warms up any remaining Pandas CSV data
-  4. start_wazuh_sync()           — Background Wazuh poll task (runs every 5 min)
+  3. start_wazuh_sync()           — Background Wazuh poll task (runs every 1 minute)
 
 Note: Table creation is now handled strictly by Alembic migrations externally.
 """
@@ -23,7 +22,6 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal, close_db
 from app.services.auth_service import seed_default_admin
-from app.services.query_service import warm_cache, _invalidate_cache
 from app.services.wazuh_service import WazuhCollector
 from app.models.db_models import Application, AppConfig, Microservice
 
@@ -39,8 +37,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
-
-# ─── Seed helper ─────────────────────────────────────────────────────────────
 
 async def _seed_applications_config() -> None:
     """
@@ -64,7 +60,6 @@ async def _seed_applications_config() -> None:
     async with AsyncSessionLocal() as db:
         try:
             for env in ("cloud", "local"):
-                # ── 1. Applications ──
                 for app_id, name in _APPS:
                     exists = (await db.execute(
                         select(Application).where(
@@ -75,7 +70,6 @@ async def _seed_applications_config() -> None:
                     if not exists:
                         db.add(Application(env=env, app_id=app_id, name=name))
 
-                # ── 2. Microservices ──
                 has_ms = (await db.execute(
                     select(Microservice).where(Microservice.env == env).limit(1)
                 )).scalar_one_or_none()
@@ -88,7 +82,6 @@ async def _seed_applications_config() -> None:
                             position_left=left, connections_csv=conns,
                         ))
 
-                # ── 3. AppConfigs ──
                 for app_id, _ in _APPS:
                     if app_id == "all":
                         continue
@@ -103,63 +96,45 @@ async def _seed_applications_config() -> None:
 
             await db.commit()
 
-        except IntegrityError:
+        except (IntegrityError, ProgrammingError):
             await db.rollback()
-            logger.info("Application config seed skipped: Data already inserted by another worker.")
-        except ProgrammingError:
-            await db.rollback()
-            logger.warning("Database tables not ready. Skipping application config seed.")
+            logger.info("Application config seed skipped: Data already exists or tables not ready.")
         except Exception as e:
             await db.rollback()
             logger.error(f"Unexpected error during application config seed: {e}")
 
-# ─── Wazuh background task ────────────────────────────────────────────────────
-
 async def _start_wazuh_sync() -> None:
     """
-    Background coroutine that polls Wazuh every 5 minutes for new alerts.
+    Background coroutine that polls Wazuh every minute for new alerts.
     """
     collector = WazuhCollector()
-
     while True:
         try:
             logger.info("[WazuhSync] Polling Wazuh for new alerts ...")
             async with AsyncSessionLocal() as db:
                 await collector.sync_alerts(db)
-            _invalidate_cache()
-            warm_cache()
-            logger.info("[WazuhSync] Sync complete — dashboard cache refreshed.")
+            logger.info("[WazuhSync] Sync complete.")
         except asyncio.CancelledError:
             logger.info("[WazuhSync] Background task cancelled — shutting down.")
-            raise
+            break
         except Exception as exc:
             logger.error("[WazuhSync] Error during sync: %s", exc, exc_info=True)
 
-        await asyncio.sleep(300)  # 5-minute polling interval
-
-# ─── Application Lifespan ─────────────────────────────────────────────────────
+        await asyncio.sleep(60)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app_name} (env: {settings.app_env}) ...")
-
-    # 1. Seed user accounts and app configs (Safe to fail if Alembic hasn't run yet)
-    await seed_default_admin()
-    await _seed_applications_config()
-    
-    # 2. Warm up remaining Pandas caches
     try:
-        warm_cache()
-    except Exception as exc:
-        logger.warning(f"Could not warm pandas cache (likely no CSVs): {exc}")
+        await seed_default_admin()
+        await _seed_applications_config()
+    except (IntegrityError, ProgrammingError):
+        logger.warning("Database not ready. Skipping initial data seeding.")
 
-    # 3. Start background Wazuh poll task
     wazuh_task = asyncio.create_task(_start_wazuh_sync())
     logger.info(f"{settings.app_name} startup complete. Wazuh sync active.")
 
-    # ── Application is running ──────────────────────────────────────
-    yield  
-    # ────────────────────────────────────────────────────────────────
+    yield
 
     logger.info("Shutting down ATLAS ...")
     wazuh_task.cancel()
@@ -170,18 +145,14 @@ async def lifespan(app: FastAPI):
     await close_db()
     logger.info("Database connection pool closed. Shutdown complete.")
 
-# ─── FastAPI Application ───────────────────────────────────────────────────────
-
 app = FastAPI(
     title="ATLAS — Advanced Traffic Layer Anomaly System",
-    description="Enterprise SOC Dashboard backend powered by FastAPI + PostgreSQL.",
-    version="2.0.0",
+    description="Enterprise SOC Dashboard backend powered by FastAPI + PostgreSQL.",n    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
 )
 
-# ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.get_cors_origins(),
@@ -190,13 +161,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth_router)
 app.include_router(dashboard_router)
 app.include_router(settings_router)
 app.include_router(actions_router)
 
-# ── Global Exception Handler ──────────────────────────────────────────────────
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc: Exception):
     logger.error(f"Unhandled exception on {request.url}: {exc}", exc_info=True)
@@ -207,8 +176,6 @@ async def global_exception_handler(request, exc: Exception):
             "detail": str(exc) if settings.debug else "Contact your SOC administrator.",
         },
     )
-
-# ── Health & Admin Endpoints ──────────────────────────────────────────────────
 
 @app.get("/", tags=["Health"])
 async def root():
@@ -234,16 +201,3 @@ async def health():
         "database": db_status,
         "stack": "FastAPI",
     }
-
-@app.post("/admin/reload-cache", tags=["Admin"])
-async def admin_reload_cache():
-    try:
-        _invalidate_cache()
-        warm_cache()
-        return {"status": "success", "message": "Cache reloaded."}
-    except Exception as exc:
-        logger.error(f"Manual cache reload failed: {exc}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "detail": str(exc)},
-        )

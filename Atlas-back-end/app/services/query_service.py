@@ -1,65 +1,41 @@
-"""
-services/query_service.py  ←  BACKWARD-COMPATIBILITY SHIM
-══════════════════════════════════════════════════════════════════════════════
-This file REPLACES the 600-line monolith.  It re-exports every public symbol
-from the new modular architecture so that existing route handlers and callers
-that import from `app.services.query_service` continue to work without any
-change to their import lines.
+'''
+import logging
+import pandas as pd
+from functools import lru_cache
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.config import get_log_data_dir
 
-Migration path
-──────────────
-Phase 1 — Drop-in replacement (now):
-  Replace the old query_service.py with this file.
-  Zero route changes needed.
+logger = logging.getLogger(__name__)
 
-Phase 2 — Gradual migration (recommended):
-  Update each route file to import from the domain-specific module or from
-  `app.services.query` (the package __init__).  Once all routes are updated,
-  delete this shim.
+@lru_cache(maxsize=128)
+def get_dataframe(filename: str) -> pd.DataFrame:
+    """
+    Reads a CSV file into a Pandas DataFrame and caches the result.
+    """
+    filepath = get_log_data_dir() / filename
+    try:
+        return pd.read_csv(filepath)
+    except FileNotFoundError:
+        logger.warning(f"Cache miss. File not found: {filepath}")
+        return pd.DataFrame()
 
-  Example migration for routes_dashboard.py:
-    # Old
-    from app.services.query_service import get_overview, get_api_monitoring
+def invalidate_cache():
+    """
+    Invalidates the cache for all dataframes.
+    """
+    logger.info("Invalidating all query caches...")
+    get_dataframe.cache_clear()
 
-    # New
-    from app.services.query import get_overview, get_api_monitoring
-
-What is NOT re-exported
-───────────────────────
-Private CSV helpers (_build_api_df, _build_network_df, etc.) are intentionally
-not exposed — they live in connectors/log_loader.py.  If any non-route code
-imported those private names, update it to:
-    from app.services.connectors.log_loader import build_api_df
-
-warm_cache and _invalidate_cache are re-exported for main.py compatibility.
-"""
-
-# ── Cache management (used by main.py lifespan) ───────────────────────────────
-from app.services.cache import cache_bust as _cache_bust         # noqa: F401
-from app.services.cache import invalidate_cache as _invalidate_cache  # noqa: F401
-from app.services.connectors.log_loader import warm_cache         # noqa: F401
-
-# Re-export _invalidate_cache under both names main.py uses
-invalidate_cache = _invalidate_cache
-
-# ── Domain service functions ──────────────────────────────────────────────────
-from app.services.query.api_service      import get_api_monitoring    # noqa: F401
-from app.services.query.db_service       import get_db_monitoring     # noqa: F401
-from app.services.query.endpoint_service import get_endpoint_security # noqa: F401
-from app.services.query.network_service  import get_network_traffic   # noqa: F401
-from app.services.query.overview_service import (                     # noqa: F401
-    get_header_data,
-    get_overview,
-    get_team_users,
-)
-from app.services.query.reports_service  import (                     # noqa: F401
-    generate_report,
-    get_app_config,
-    get_case_management,
-    get_incidents,
-    get_quarantined_endpoints,
-    get_reports_overview,
-    lift_quarantine,
-    update_app_config,
-    update_incident_status,
-)
+def warm_cache():
+    """
+    Warms up the cache by loading all essential CSVs.
+    """
+    logger.info("Warming up query cache...")
+    get_dataframe("network_logs.csv")
+    get_dataframe("api_logs.csv")
+    get_dataframe("endpoint_logs.csv")
+    get_dataframe("db_activity_logs.csv")
+    get_dataframe("incidents.csv")
+    get_dataframe("alerts.csv")
+    logger.info("Query cache warmed up.")
+''
