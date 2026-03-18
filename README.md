@@ -223,4 +223,406 @@ Change these after first login in any non-local environment.
 
 ---
 
+# ATLAS Backend — Security Reference
+
+This document describes the threat model, secret management conventions, and
+operational security runbook for the ATLAS SOC Dashboard backend.
+
+---
+
+## 1. Threat Model
+
+| Asset | Threat | Control |
+|---|---|---|
+| Wazuh API password | Exposed in source code | Removed all defaults; required via `WAZUH_PASSWORD` env var |
+| JWT signing key | Weak/default key allows token forgery | `SECRET_KEY` is required, min-length validated, placeholder-rejected |
+| Ingest API key | Credential stuffing from public pipelines | `INGEST_API_KEY` required; `hmac.compare_digest` prevents timing oracle |
+| Seed account passwords | Default creds left unchanged in prod | All three seed passwords are required env vars with no Python default |
+| Velociraptor webhook secret | Unsigned webhook replay attacks | `VELOCIRAPTOR_WEBHOOK_SECRET` required; HMAC-SHA256 verification |
+| Database URL | Plaintext connection string in repo | `DATABASE_URL` required env var; never committed |
+| AWS credentials | Overprivileged long-lived keys | Prefer IAM role; keys optional and blank-able in `.env` |
+
+---
+
+## 2. Secret Inventory
+
+Every secret the backend requires, how to generate it, and where it is used:
+
+### `SECRET_KEY`
+- **Purpose:** Signs and verifies all JWT access tokens.
+- **Generate:** `python -c "import secrets; print(secrets.token_hex(32))"`
+- **Rotation impact:** All active sessions are immediately invalidated. Users must log in again.
+- **Used in:** `auth_service.create_access_token`, `auth_service.decode_token`
+
+### `INGEST_API_KEY`
+- **Purpose:** Authenticates Vector/Fluent Bit HTTP ingest pipelines.
+- **Generate:** `python -c "import secrets; print(secrets.token_urlsafe(48))"`
+- **Rotation impact:** All ingestion pipelines stop until their config is updated with the new key.
+- **Used in:** `core/security.py` — `require_ingest_api_key` dependency
+
+### `WAZUH_PASSWORD`
+- **Purpose:** Authenticates the ATLAS backend against the Wazuh Manager REST API.
+- **Rotation:** Change in Wazuh UI → update `WAZUH_PASSWORD` in `.env` → restart ATLAS.
+- **Used in:** `services/connectors/wazuh_client.py`, `services/wazuh_service.py`, `core/wazuh_client.py`
+
+### `VELOCIRAPTOR_WEBHOOK_SECRET`
+- **Purpose:** HMAC-SHA256 signature verification for Velociraptor webhooks.
+- **Generate:** `openssl rand -hex 32`
+- **Used in:** Webhook validation middleware (routes that accept Velociraptor payloads)
+
+### `SEED_ADMIN_PASSWORD` / `SEED_ANALYST_PASSWORD` / `SEED_READONLY_PASSWORD`
+- **Purpose:** Bootstrap user accounts on first startup (when `atlas_users` is empty).
+- **Important:** After first boot these are hashed and stored in the database. Changing `.env` does **not** change the stored hash — use the UI or a DB migration instead.
+- **Rotation:** Update the hash in the DB directly or via the change-password endpoint.
+
+### `DATABASE_URL`
+- **Purpose:** Async SQLAlchemy connection string (contains DB password).
+- **Format:** `postgresql+asyncpg://user:password@host:5432/dbname`
+- **Rotation:** Update `.env`, restart ATLAS and docker-compose `postgres` service together.
+
+---
+
+## 3. Placeholder Rejection
+
+`config.py` ships a `_KNOWN_PLACEHOLDERS` sentinel set. At startup, every
+secret field runs `_reject_placeholder()` which raises a `ValidationError` if
+the value matches any of these strings:
+
+```
+change_me_in_production, change_me_super_secret_key_for_jwt_signing,
+atlasadmin1!, analyst123!, readonly123!, changeme, change, password, …
+```
+
+This means a forgotten `.env.example` copy-paste causes an **immediate, loud
+failure** rather than a silent security misconfiguration.
+
+---
+
+## 4. Pre-flight Validation
+
+Before starting the application in any environment, run:
+
+```bash
+python scripts/check_env.py
+```
+
+This script:
+- Loads `.env` (or `$ENV_FILE`)
+- Checks every required variable is set, non-empty, meets minimum length, and
+  does not contain a known placeholder
+- Runs format validators (URL structure, database driver presence)
+- Exits `0` on success, `1` on any failure
+
+**Integrate in Dockerfile:**
+```dockerfile
+CMD ["sh", "-c", "python scripts/check_env.py && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+```
+
+---
+
+## 5. SSL / TLS
+
+### Wazuh Manager
+Wazuh ships with a self-signed certificate. For development:
+```env
+WAZUH_VERIFY_SSL=false
+```
+
+For production, replace the cert and set:
+```env
+WAZUH_VERIFY_SSL=true
+WAZUH_CA_BUNDLE=/etc/wazuh-certs/ca.pem
+```
+
+### ATLAS Backend (inbound TLS)
+Terminate TLS at a reverse proxy (nginx, Caddy, AWS ALB). Do not expose
+uvicorn's plaintext port to the internet.
+
+---
+
+## 6. Key Rotation Runbook
+
+### Rotating `SECRET_KEY`
+1. Generate new key: `python -c "import secrets; print(secrets.token_hex(32))"`
+2. Update `SECRET_KEY` in `.env` (or secrets manager).
+3. Restart ATLAS. **All active sessions expire immediately.**
+4. Notify analysts — they must log in again.
+
+### Rotating `INGEST_API_KEY`
+1. Generate new key.
+2. Update `INGEST_API_KEY` in `.env`.
+3. Update the key in every Vector/Fluent Bit config file.
+4. Restart Vector/Fluent Bit first, then restart ATLAS.
+5. Verify ingestion resumes: `curl -H "X-Atlas-API-Key: $NEW_KEY" http://localhost:8000/health`
+
+### Rotating `WAZUH_PASSWORD`
+1. Change the password in the Wazuh Manager UI (`wazuh-wui` user).
+2. Update `WAZUH_PASSWORD` in `.env`.
+3. Restart ATLAS. The token cache will refresh on the next poll cycle.
+
+---
+
+## 7. Secrets Management in Production
+
+For production deployments, prefer a secrets manager over a plaintext `.env` file:
+
+| Platform | Recommended approach |
+|---|---|
+| AWS ECS / EC2 | AWS Secrets Manager → inject as env vars in task definition |
+| Kubernetes | Kubernetes Secrets (external-secrets-operator for rotation) |
+| Docker Swarm | `docker secret` → mounted as env vars |
+| Self-hosted | HashiCorp Vault Agent → write `.env` to a tmpfs mount |
+
+`pydantic-settings` reads from environment variables regardless of how they
+are injected — no code changes required when switching from `.env` to a
+secrets manager.
+
+---
+
+## 8. Reporting Vulnerabilities
+
+If you discover a security vulnerability in ATLAS, please open a **private**
+GitHub Security Advisory rather than a public issue, so the team can
+coordinate a fix before disclosure.
+
 *ATLAS is for internal SOC use. Do not expose to the internet without HTTPS, rate limiting, and proper secrets management.*
+
+# ATLAS Alembic Setup Guide
+
+## 🎯 Problem Solved
+- ❌ **Race Conditions**: Multiple Docker workers hitting `UndefinedTableError` and `IntegrityError`
+- ❌ **Table Creation Issues**: `Base.metadata.create_all()` causing timing problems
+- ✅ **Solution**: Alembic migrations with pre-start script and robust seeding
+
+---
+
+## 📁 Files Updated
+
+### 1. **app/main.py** - Removed Auto Table Creation
+```python
+# BEFORE:
+# await create_all_tables()
+
+# AFTER:
+# 1. Database tables are now managed by Alembic migrations
+#    Migrations will be run via entrypoint.sh before Uvicorn starts
+```
+
+### 2. **app/core/database.py** - Cleaned Up
+```python
+# REMOVED:
+# async def create_all_tables() -> None:
+#     # Creates all database tables defined in db_models.py
+#     # Called once at application startup
+
+# KEPT:
+# - All other functions (get_db, close_db)
+# - Base import for model registration
+```
+
+### 3. **alembic.ini** - Configuration
+```ini
+[alembic]
+script_location = alembic
+prepend_sys_path = .
+version_path_separator = os
+output_encoding = utf-8
+sqlalchemy.url = postgresql://user:pass@localhost/dbname
+```
+
+### 4. **alembic/env.py** - Async PostgreSQL Support
+```python
+# Key features:
+# - Dynamic DATABASE_URL from app.core.config.settings
+# - Async PostgreSQL (asyncpg) compatibility  
+# - All models imported for autogenerate
+# - Both sync and async migration support
+```
+
+### 5. **entrypoint.sh** - Docker Startup Script
+```bash
+# Features:
+# - Database readiness wait (max 30s, 6 retries)
+# - Alembic migration execution before FastAPI
+# - Proper error handling and logging
+# - Executable permissions (chmod +x)
+```
+
+---
+
+## 🚀 Initial Setup Commands
+
+### Step 1: Install Alembic Dependencies
+```bash
+cd /home/applied-sw02/Desktop/Atlas-full-stack/Atlas-back-end
+pip install alembic[asyncpg]
+```
+
+### Step 2: Generate First Migration
+```bash
+# Generate the initial migration (creates all tables)
+alembic revision --autogenerate -m "Initial migration"
+
+# This creates: alembic/versions/001_initial_migration.py
+```
+
+### Step 3: Verify Migration File
+```bash
+# Check the generated migration
+ls -la alembic/versions/
+cat alembic/versions/001_initial_migration.py
+```
+
+---
+
+## 🐳 Docker Integration
+
+### Option 1: Update docker-compose.yml
+```yaml
+services:
+  atlas-backend:
+    build: .
+    # Replace original command with entrypoint script
+    command: ["./entrypoint.sh", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:password@db:5432/atlas
+    depends_on:
+      - db
+```
+
+### Option 2: Update Dockerfile
+```dockerfile
+# Make entrypoint script executable
+RUN chmod +x entrypoint.sh
+
+# Set entrypoint
+ENTRYPOINT ["./entrypoint.sh"]
+```
+
+---
+
+## 🔧 Development Commands
+
+### Create New Migration
+```bash
+# After model changes:
+alembic revision --autogenerate -m "Description of changes"
+```
+
+### Run Migrations Manually
+```bash
+# Upgrade to latest:
+alembic upgrade head
+
+# Downgrade to specific:
+alembic downgrade -1
+```
+
+### Migration History
+```bash
+# View migration history:
+alembic history
+
+# View current revision:
+alembic current
+```
+
+---
+
+## 🛡️ Race Condition Prevention
+
+### Seeding Protection
+Both seed functions now include robust error handling:
+
+```python
+# auth_service.py - seed_default_admin()
+try:
+    db.add_all([admin, analyst, readonly])
+    await db.commit()
+except IntegrityError:
+    await db.rollback()
+    logger.info("Seed accounts already created by another worker.")
+    return
+
+# main.py - _seed_applications_config()
+try:
+    await db.commit()
+except IntegrityError:
+    await db.rollback()
+    logger.info("Application config seed skipped: Data already inserted.")
+except ProgrammingError:
+    await db.rollback()
+    logger.warning("Database tables not ready. Skipping application config seed.")
+```
+
+### Database Readiness Check
+```python
+# entrypoint.sh includes database connection test
+# Waits up to 30 seconds for database to be ready
+# Prevents UndefinedTableError during migrations
+```
+
+---
+
+## 📋 Production Deployment Checklist
+
+- [ ] Install Alembic: `pip install alembic[asyncpg]`
+- [ ] Generate initial migration: `alembic revision --autogenerate -m "Initial"`
+- [ ] Update docker-compose.yml to use entrypoint.sh
+- [ ] Set proper DATABASE_URL in environment
+- [ ] Test migrations: `alembic upgrade head`
+- [ ] Verify all tables created: `\dt` in psql
+- [ ] Test seeding with multiple workers: `docker-compose up --scale backend=3`
+
+---
+
+## 🔍 Troubleshooting
+
+### Migration Fails
+```bash
+# Check database connection
+python -c "from app.core.config import get_settings; print(get_settings().database_url)"
+
+# Run migrations with debug output
+alembic upgrade head --verbose
+
+# Check current revision
+alembic current
+```
+
+### Database Connection Issues
+```bash
+# Test connection manually
+python -c "
+import asyncio
+from sqlalchemy.ext.asyncio import create_async_engine
+from app.core.config import get_settings
+
+async def test():
+    engine = create_async_engine(get_settings().database_url)
+    async with engine.begin() as conn:
+        await conn.execute('SELECT 1')
+    print('✅ Connected')
+
+asyncio.run(test())
+"
+```
+
+---
+
+## 📊 Architecture Benefits
+
+### ✅ **Solved Issues**
+- **No more UndefinedTableError**: Tables created via migrations before app starts
+- **No race conditions**: Single migration run, robust seeding with IntegrityError handling
+- **Version control**: All schema changes tracked in Git
+- **Rollback support**: Can downgrade migrations if needed
+- **Multi-worker safe**: Entry point script ensures database ready before any worker starts
+
+### 🚀 **New Capabilities**
+- **Zero-downtime deployments**: Migrations run before traffic starts
+- **Schema evolution**: Proper database versioning
+- **Team collaboration**: Migration files can be reviewed in PRs
+- **Production safety**: Migrations tested before deployment
+
+The ATLAS backend is now enterprise-ready with robust database management! 🎉

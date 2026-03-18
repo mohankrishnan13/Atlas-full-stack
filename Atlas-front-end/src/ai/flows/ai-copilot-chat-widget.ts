@@ -21,7 +21,16 @@ const AICopilotChatOutputSchema = z.object({
 export type AICopilotChatOutput = z.infer<typeof AICopilotChatOutputSchema>;
 
 export async function askAICopilot(input: AICopilotChatInput): Promise<AICopilotChatOutput> {
-  return aiCopilotChatFlow(input);
+  const stream = await ai.run('aiCopilotChatFlow', input, { streaming: true });
+
+  let lastOutput: AICopilotChatOutput = { answer: '' };
+  for await (const chunk of stream) {
+    if (chunk.type === 'output') {
+      lastOutput = chunk.output as AICopilotChatOutput;
+    }
+  }
+
+  return lastOutput;
 }
 
 const aiCopilotPrompt = ai.definePrompt({

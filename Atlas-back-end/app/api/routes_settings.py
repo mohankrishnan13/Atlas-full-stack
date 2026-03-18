@@ -1,91 +1,49 @@
 """
-api/routes_settings.py — Containment Rules & System Settings
-
-These are admin-only endpoints for configuring ATLAS progressive containment
-thresholds. In production, protect with role-based auth middleware.
-
-Rules are stored in-memory in this MVP. For production, persist them to
-a `containment_rules` PostgreSQL table with `env` and `app_name` indexes.
+api/routes_settings.py — System Settings & Configurations
+Handles dynamic tuning via the Application Context Selector in the UI.
 """
 
 import logging
-from typing import List
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from fastapi import APIRouter, HTTPException
-from app.models.schemas import ContainmentRule, ContainmentRuleUpdate
+from app.core.database import get_db
+from app.models.db_models import AtlasUser
+from app.services.auth_service import get_current_user
+from app.models.schemas import AppConfigResponse, AppConfigUpdateRequest, QuarantinedEndpointsResponse
+from app.services import query_service
 
 logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/settings", tags=["ATLAS Settings (Config)"])
 
-router = APIRouter(prefix="/settings", tags=["Settings"])
+@router.get("/apps/{app_id}", response_model=AppConfigResponse)
+async def get_app_config(
+    app_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: AtlasUser = Depends(get_current_user),
+) -> AppConfigResponse:
+    if not app_id:
+        raise HTTPException(status_code=400, detail="app_id is required")
+    return await query_service.get_app_config(current_user.env, app_id, db)
 
-# In-memory store — replace with DB table in production
-_rules_store: dict = {
-    "default": ContainmentRule(
-        rule_id="default",
-        name="Global Default Rule",
-        warn_threshold=1,
-        soft_limit_threshold=3,
-        hard_block_threshold=5,
-        applies_to_apps=[],
-        enabled=True,
-    )
-}
+@router.put("/apps/{app_id}", response_model=AppConfigResponse)
+async def update_app_config(
+    app_id: str,
+    body: AppConfigUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: AtlasUser = Depends(get_current_user),
+) -> AppConfigResponse:
+    if not app_id:
+        raise HTTPException(status_code=400, detail="app_id is required")
+    logger.info(f"[SETTINGS] AppConfig update by {current_user.email} env={current_user.env} app_id={app_id}")
+    return await query_service.update_app_config(current_user.env, app_id, body, db)
 
-
-@router.get("/containment-rules", response_model=List[ContainmentRule])
-async def list_containment_rules() -> List[ContainmentRule]:
-    """Returns all configured progressive containment rules."""
-    return list(_rules_store.values())
-
-
-@router.get("/containment-rules/{rule_id}", response_model=ContainmentRule)
-async def get_containment_rule(rule_id: str) -> ContainmentRule:
-    if rule_id not in _rules_store:
-        raise HTTPException(404, f"Rule '{rule_id}' not found.")
-    return _rules_store[rule_id]
-
-
-@router.post("/containment-rules", response_model=ContainmentRule, status_code=201)
-async def create_containment_rule(rule: ContainmentRule) -> ContainmentRule:
-    """
-    Creates a new containment rule for specific applications.
-    App-specific rules take precedence over the global default rule.
-    """
-    if rule.rule_id in _rules_store:
-        raise HTTPException(409, f"Rule '{rule.rule_id}' already exists. Use PATCH to update.")
-
-    if rule.warn_threshold >= rule.soft_limit_threshold:
-        raise HTTPException(400, "warn_threshold must be less than soft_limit_threshold.")
-    if rule.soft_limit_threshold >= rule.hard_block_threshold:
-        raise HTTPException(400, "soft_limit_threshold must be less than hard_block_threshold.")
-
-    _rules_store[rule.rule_id] = rule
-    logger.info(f"Containment rule '{rule.rule_id}' created.")
-    return rule
-
-
-@router.patch("/containment-rules/{rule_id}", response_model=ContainmentRule)
-async def update_containment_rule(rule_id: str, update: ContainmentRuleUpdate) -> ContainmentRule:
-    """Partially updates a containment rule — only provided fields are modified."""
-    if rule_id not in _rules_store:
-        raise HTTPException(404, f"Rule '{rule_id}' not found.")
-
-    existing = _rules_store[rule_id]
-    updated_data = existing.model_dump()
-    for field, value in update.model_dump(exclude_none=True).items():
-        updated_data[field] = value
-
-    updated_rule = ContainmentRule(**updated_data)
-    _rules_store[rule_id] = updated_rule
-    logger.info(f"Containment rule '{rule_id}' updated.")
-    return updated_rule
-
-
-@router.delete("/containment-rules/{rule_id}")
-async def delete_containment_rule(rule_id: str) -> dict:
-    if rule_id == "default":
-        raise HTTPException(400, "Cannot delete the default containment rule.")
-    if rule_id not in _rules_store:
-        raise HTTPException(404, f"Rule '{rule_id}' not found.")
-    del _rules_store[rule_id]
-    return {"deleted": True, "rule_id": rule_id}
+@router.get("/apps/{app_id}/quarantine", response_model=QuarantinedEndpointsResponse)
+async def get_quarantined(
+    app_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: AtlasUser = Depends(get_current_user),
+) -> QuarantinedEndpointsResponse:
+    if not app_id:
+        raise HTTPException(status_code=400, detail="app_id is required")
+    return await query_service.get_quarantined_endpoints(current_user.env, app_id, db)

@@ -67,7 +67,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             result = await db.execute(select(MyModel))
 
     The session is automatically closed (and rolled back on error)
-    after the request completes, preventing connection leaks.
+    after request completes, preventing connection leaks.
     """
     async with AsyncSessionLocal() as session:
         try:
@@ -79,22 +79,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
-async def create_all_tables() -> None:
-    """
-    Creates all database tables defined in db_models.py.
-    Called once at application startup — safe to call multiple times
-    (CREATE TABLE IF NOT EXISTS semantics via checkfirst=True).
-    """
-    # Import models to ensure they are registered with Base.metadata
-    import app.models.db_models  # noqa: F401
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, checkfirst=True)
-
-    logger.info("Database tables verified / created.")
-
-
 async def close_db() -> None:
-    """Gracefully disposes the connection pool on application shutdown."""
+    """Gracefully disposes of connection pool on application shutdown."""
     await engine.dispose()
     logger.info("Database connection pool closed.")
