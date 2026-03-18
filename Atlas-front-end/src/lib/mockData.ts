@@ -190,6 +190,54 @@ export const mockUsersData = [
   { id: 5, name: 'Michael Chen', email: 'michael@atlas.local', role: 'Read-Only', is_active: true, invite_pending: false }
 ];
 
+// ─── Anomaly Command Center — Threat Pulse Chart ─────────────────────────────
+// 24-hourly buckets approximating a realistic threat frequency pattern.
+// Endpoint = Wazuh agent events. Network = Zeek anomaly detections.
+
+export const mockThreatPulseData = [
+  { time: '00:00', endpoint: 0, network: 1 },
+  { time: '01:00', endpoint: 0, network: 0 },
+  { time: '02:00', endpoint: 1, network: 2 },
+  { time: '03:00', endpoint: 0, network: 1 },
+  { time: '04:00', endpoint: 0, network: 0 },
+  { time: '05:00', endpoint: 1, network: 1 },
+  { time: '06:00', endpoint: 0, network: 2 },
+  { time: '07:00', endpoint: 1, network: 1 },
+  { time: '08:00', endpoint: 2, network: 3 },
+  { time: '09:00', endpoint: 1, network: 2 },
+  { time: '10:00', endpoint: 3, network: 4 },
+  { time: '11:00', endpoint: 2, network: 3 },
+  { time: '12:00', endpoint: 1, network: 2 },
+  { time: '13:00', endpoint: 3, network: 3 },
+  { time: '14:00', endpoint: 4, network: 5 },
+  { time: '15:00', endpoint: 3, network: 4 },
+  { time: '16:00', endpoint: 5, network: 6 },
+  { time: '17:00', endpoint: 4, network: 5 },
+  { time: '18:00', endpoint: 3, network: 4 },
+  { time: '19:00', endpoint: 2, network: 3 },
+  { time: '20:00', endpoint: 4, network: 5 },
+  { time: '21:00', endpoint: 3, network: 4 },
+  { time: '22:00', endpoint: 2, network: 3 },
+  { time: '23:00', endpoint: 1, network: 2 },
+];
+
+// ─── Anomaly Command Center — AI Explanation Stubs ───────────────────────────
+// Keyed to wazuhEvent IDs and network anomaly IDs from mockEndpointSecurityData
+// and mockNetworkTrafficData. These are placeholder strings until Phase 2 real
+// AI integration wires in the actual /ai/investigator-summary flow.
+
+export const mockAiExplanations: Record<string, string> = {
+  'evt-001': 'Known cryptomining binary signature. Suggests compromised user account or malicious download.',
+  'evt-002': 'Firewall bypass via allow_all rule. Possible insider misconfiguration or targeted policy tampering.',
+  'evt-003': 'Unauthorised removable media introduces exfiltration and malware ingestion risk.',
+  'evt-004': 'Repeated sudo failures indicate automated privilege escalation tooling.',
+  'evt-005': 'Port 4444 is a default Metasploit handler port — likely C2 callback attempt.',
+  'net-1':   'High-volume SSH login attempts from Tor exit node. Classic credential-stuffing pattern.',
+  'net-2':   'Sequential port sweep across /24 subnet. Reconnaissance phase preceding lateral movement.',
+  'net-3':   'Large SFTP transfer to external IP outside business hours. High-confidence exfiltration.',
+  'net-4':   'Unexpected egress from DB tier to public internet — violates network segmentation policy.',
+};
+
 export const mockReportsData = {
   scheduledReports: [
     { id: 1, title: "Weekly Executive Threat Briefing", description: "High-level overview of critical security events and trends", schedule: "Weekly (Monday 08:00)", active: true, configureLabel: "Configure" },

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   AreaChart,
   Area,
@@ -11,15 +11,13 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { AlertTriangle, Radio, Shield, Wifi, Cpu, BrainCircuit } from 'lucide-react';
+import { AlertTriangle, Radio, Shield, Wifi, Cpu, BrainCircuit, LoaderCircle } from 'lucide-react';
 import { cn, getSeverityClassNames } from '@/lib/utils';
-import {
-  mockEndpointSecurityData,
-  mockNetworkTrafficData,
-  mockOverviewData,
-} from '@/lib/mockData';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
+import { useEnvironment } from '@/context/EnvironmentContext';
+import { toast } from 'sonner';
+import { getEndpointSecurity, getNetworkTraffic } from '@/lib/apiClient';
+import { mockThreatPulseData, mockAiExplanations } from '@/lib/mockData';
+import type { EndpointSecurityData, NetworkTrafficData } from '@/lib/types';
 
 type UnifiedAnomaly = {
   id: string;
@@ -31,61 +29,12 @@ type UnifiedAnomaly = {
   aiExplanation: string;
 };
 
-// ─── Severity order for sorting ───────────────────────────────────────────────
-
 const SEVERITY_ORDER: Record<string, number> = {
   Critical: 0,
   High: 1,
   Medium: 2,
   Low: 3,
 };
-
-// ─── Static time-series derived for the Threat Pulse chart ───────────────────
-// 24 hourly buckets. Wazuh (endpoint) and Zeek (network) counts are approximated
-// from the mock data totals spread across a realistic pattern.
-
-const THREAT_PULSE_DATA = [
-  { time: '00:00', endpoint: 0, network: 1 },
-  { time: '01:00', endpoint: 0, network: 0 },
-  { time: '02:00', endpoint: 1, network: 2 },
-  { time: '03:00', endpoint: 0, network: 1 },
-  { time: '04:00', endpoint: 0, network: 0 },
-  { time: '05:00', endpoint: 1, network: 1 },
-  { time: '06:00', endpoint: 0, network: 2 },
-  { time: '07:00', endpoint: 1, network: 1 },
-  { time: '08:00', endpoint: 2, network: 3 },
-  { time: '09:00', endpoint: 1, network: 2 },
-  { time: '10:00', endpoint: 3, network: 4 },
-  { time: '11:00', endpoint: 2, network: 3 },
-  { time: '12:00', endpoint: 1, network: 2 },
-  { time: '13:00', endpoint: 3, network: 3 },
-  { time: '14:00', endpoint: 4, network: 5 },
-  { time: '15:00', endpoint: 3, network: 4 },
-  { time: '16:00', endpoint: 5, network: 6 },
-  { time: '17:00', endpoint: 4, network: 5 },
-  { time: '18:00', endpoint: 3, network: 4 },
-  { time: '19:00', endpoint: 2, network: 3 },
-  { time: '20:00', endpoint: 4, network: 5 },
-  { time: '21:00', endpoint: 3, network: 4 },
-  { time: '22:00', endpoint: 2, network: 3 },
-  { time: '23:00', endpoint: 1, network: 2 },
-];
-
-// ─── AI Explanation stubs (placeholder until Phase 2 AI integration) ─────────
-
-const AI_EXPLANATIONS: Record<string, string> = {
-  'evt-001': 'Known cryptomining binary signature. Suggests compromised user account or malicious download.',
-  'evt-002': 'Firewall bypass via allow_all rule. Possible insider misconfiguration or targeted policy tampering.',
-  'evt-003': 'Unauthorised removable media introduces exfiltration and malware ingestion risk.',
-  'evt-004': 'Repeated sudo failures indicate automated privilege escalation tooling.',
-  'evt-005': 'Port 4444 is a default Metasploit handler port — likely C2 callback attempt.',
-  'net-1': 'High-volume SSH login attempts from Tor exit node. Classic credential-stuffing pattern.',
-  'net-2': 'Sequential port sweep across /24 subnet. Reconnaissance phase preceding lateral movement.',
-  'net-3': 'Large SFTP transfer to external IP outside business hours. High-confidence exfiltration.',
-  'net-4': 'Unexpected egress from DB tier to public internet — violates network segmentation policy.',
-};
-
-// ─── Custom Tooltip ──────────────────────────────────────────────────────────
 
 function PulseTooltip({ active, payload, label }: {
   active?: boolean;
@@ -107,8 +56,6 @@ function PulseTooltip({ active, payload, label }: {
   );
 }
 
-// ─── Severity Badge ──────────────────────────────────────────────────────────
-
 function SeverityBadge({ severity }: { severity: string }) {
   const sc = getSeverityClassNames(severity as Parameters<typeof getSeverityClassNames>[0]);
   return (
@@ -117,8 +64,6 @@ function SeverityBadge({ severity }: { severity: string }) {
     </span>
   );
 }
-
-// ─── Source Tag ──────────────────────────────────────────────────────────────
 
 function SourceTag({ tag }: { tag: 'Wazuh' | 'Zeek' }) {
   const isWazuh = tag === 'Wazuh';
@@ -135,11 +80,7 @@ function SourceTag({ tag }: { tag: 'Wazuh' | 'Zeek' }) {
   );
 }
 
-// ─── KPI Card ────────────────────────────────────────────────────────────────
-
-function KpiCard({
-  label, value, sub, accent = false
-}: {
+function KpiCard({ label, value, sub, accent = false }: {
   label: string; value: string | number; sub?: string; accent?: boolean;
 }) {
   return (
@@ -154,44 +95,74 @@ function KpiCard({
   );
 }
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
-
 export default function AnomalyCommandCenterPage() {
-  // Build unified anomaly feed from both data sources
+  const { environment } = useEnvironment();
+  const [endpointData, setEndpointData] = useState<EndpointSecurityData | null>(null);
+  const [networkData, setNetworkData]   = useState<NetworkTrafficData | null>(null);
+  const [loading, setLoading]           = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+
+    Promise.all([getEndpointSecurity(), getNetworkTraffic()])
+      .then(([ep, net]) => {
+        if (cancelled) return;
+        setEndpointData(ep);
+        setNetworkData(net);
+      })
+      .catch(() => {
+        if (!cancelled) toast.error('Failed to load command center data.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [environment]);
+
   const anomalyFeed = useMemo<UnifiedAnomaly[]>(() => {
-    const endpointRows: UnifiedAnomaly[] = mockEndpointSecurityData.wazuhEvents.map((evt) => ({
-      id: evt.id,
-      timestamp: new Date(evt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    const endpointRows: UnifiedAnomaly[] = (endpointData?.wazuhEvents ?? []).map((evt) => ({
+      id: String(evt.id),
+      timestamp: evt.timestamp
+        ? new Date(evt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        : '—',
       source: evt.workstationId,
       threatType: evt.alert,
-      severity: evt.severity,
-      sourceTag: 'Wazuh',
-      aiExplanation: AI_EXPLANATIONS[evt.id] ?? 'AI analysis pending.',
+      severity: String(evt.severity),
+      sourceTag: 'Wazuh' as const,
+      aiExplanation: mockAiExplanations[String(evt.id)] ?? 'AI analysis pending.',
     }));
 
-    const networkRows: UnifiedAnomaly[] = mockNetworkTrafficData.networkAnomalies.map((n) => ({
+    const networkRows: UnifiedAnomaly[] = (networkData?.networkAnomalies ?? []).map((n) => ({
       id: `net-${n.id}`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       source: n.sourceIp,
       threatType: n.type,
-      severity: n.severity,
-      sourceTag: 'Zeek',
-      aiExplanation: AI_EXPLANATIONS[`net-${n.id}`] ?? 'AI analysis pending.',
+      severity: String(n.severity ?? 'Medium'),
+      sourceTag: 'Zeek' as const,
+      aiExplanation: mockAiExplanations[`net-${n.id}`] ?? 'AI analysis pending.',
     }));
 
     return [...endpointRows, ...networkRows].sort(
       (a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9)
     );
-  }, []);
+  }, [endpointData, networkData]);
 
   const criticalCount = anomalyFeed.filter((a) => a.severity === 'Critical').length;
   const highCount     = anomalyFeed.filter((a) => a.severity === 'High').length;
-  const totalToday    = mockOverviewData.activeAlerts + mockNetworkTrafficData.networkAnomalies.length;
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-48">
+        <LoaderCircle className="w-6 h-6 animate-spin text-slate-500" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
 
-      {/* ── Page Header ─────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-blue-500/10 rounded-lg flex items-center justify-center">
@@ -208,15 +179,13 @@ export default function AnomalyCommandCenterPage() {
         </div>
       </div>
 
-      {/* ── KPI Strip ───────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <KpiCard label="Critical Threats"  value={criticalCount}  sub="Require immediate action" accent />
-        <KpiCard label="High Severity"     value={highCount}      sub="Escalation candidates" />
-        <KpiCard label="Total Anomalies"   value={anomalyFeed.length} sub="Combined Wazuh + Zeek" />
-        <KpiCard label="Active Incidents"  value={totalToday}     sub="Open cases today" />
+        <KpiCard label="Critical Threats" value={criticalCount}        sub="Require immediate action" accent />
+        <KpiCard label="High Severity"    value={highCount}            sub="Escalation candidates" />
+        <KpiCard label="Total Anomalies"  value={anomalyFeed.length}   sub="Combined Wazuh + Zeek" />
+        <KpiCard label="Active Incidents" value={networkData?.activeConnections ?? 0} sub="Active connections" />
       </div>
 
-      {/* ── Section 1: Threat Pulse Chart ───────────────────────────────── */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
         <div className="flex items-center gap-2 mb-5">
           <Shield className="w-4 h-4 text-blue-400" />
@@ -224,7 +193,7 @@ export default function AnomalyCommandCenterPage() {
           <span className="ml-auto text-[11px] text-slate-500 font-mono">Endpoint (Wazuh) · Network (Zeek)</span>
         </div>
         <ResponsiveContainer width="100%" height={220}>
-          <AreaChart data={THREAT_PULSE_DATA} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+          <AreaChart data={mockThreatPulseData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
             <defs>
               <linearGradient id="gradEndpoint" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%"  stopColor="#a78bfa" stopOpacity={0.25} />
@@ -243,46 +212,24 @@ export default function AnomalyCommandCenterPage() {
               axisLine={false}
               interval={3}
             />
-            <YAxis
-              tick={{ fill: '#64748b', fontSize: 10 }}
-              tickLine={false}
-              axisLine={false}
-              allowDecimals={false}
-            />
+            <YAxis tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} allowDecimals={false} />
             <Tooltip content={<PulseTooltip />} />
             <Legend
               iconType="circle"
               iconSize={8}
-              wrapperStyle={{ fontSize: '11px', color: '#94a3b8', paddingTop: '12px' }}
+              wrapperStyle={{ fontSize: '11px', paddingTop: '12px' }}
               formatter={(value) => (
-                <span style={{ color: '#94a3b8', textTransform: 'capitalize' }}>
+                <span style={{ color: '#94a3b8' }}>
                   {value === 'endpoint' ? 'Endpoint (Wazuh)' : 'Network (Zeek)'}
                 </span>
               )}
             />
-            <Area
-              type="monotone"
-              dataKey="endpoint"
-              stroke="#a78bfa"
-              strokeWidth={2}
-              fill="url(#gradEndpoint)"
-              dot={false}
-              activeDot={{ r: 4, fill: '#a78bfa', strokeWidth: 0 }}
-            />
-            <Area
-              type="monotone"
-              dataKey="network"
-              stroke="#22d3ee"
-              strokeWidth={2}
-              fill="url(#gradNetwork)"
-              dot={false}
-              activeDot={{ r: 4, fill: '#22d3ee', strokeWidth: 0 }}
-            />
+            <Area type="monotone" dataKey="endpoint" stroke="#a78bfa" strokeWidth={2} fill="url(#gradEndpoint)" dot={false} activeDot={{ r: 4, fill: '#a78bfa', strokeWidth: 0 }} />
+            <Area type="monotone" dataKey="network"  stroke="#22d3ee" strokeWidth={2} fill="url(#gradNetwork)"  dot={false} activeDot={{ r: 4, fill: '#22d3ee', strokeWidth: 0 }} />
           </AreaChart>
         </ResponsiveContainer>
       </div>
 
-      {/* ── Section 2: Recent Critical Anomalies Feed ───────────────────── */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
         <div className="flex items-center gap-2 px-5 py-4 border-b border-slate-800">
           <AlertTriangle className="w-4 h-4 text-orange-400" />
@@ -290,14 +237,12 @@ export default function AnomalyCommandCenterPage() {
           <span className="ml-auto text-[11px] text-slate-500">{anomalyFeed.length} events</span>
         </div>
 
-        {/* Table Header */}
         <div className="grid grid-cols-[90px_1fr_1fr_90px_80px_1fr] gap-3 px-5 py-2.5 border-b border-slate-800/60 bg-slate-950/40">
           {['Time', 'Source', 'Threat Type', 'Severity', 'Origin', 'AI Explanation'].map((h) => (
             <span key={h} className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">{h}</span>
           ))}
         </div>
 
-        {/* Rows */}
         <div className="divide-y divide-slate-800/50">
           {anomalyFeed.map((row) => {
             const sc = getSeverityClassNames(row.severity as Parameters<typeof getSeverityClassNames>[0]);
@@ -310,31 +255,14 @@ export default function AnomalyCommandCenterPage() {
                   row.severity === 'Critical' && 'bg-red-500/[0.03]'
                 )}
               >
-                {/* Timestamp */}
                 <span className="text-[11px] text-slate-500 font-mono pt-0.5">{row.timestamp}</span>
-
-                {/* Source */}
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-[12px] font-semibold text-slate-200 font-mono">{row.source}</span>
-                </div>
-
-                {/* Threat Type */}
+                <span className="text-[12px] font-semibold text-slate-200 font-mono">{row.source}</span>
                 <div className="flex items-start gap-1.5">
-                  <div className={cn('mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0', sc.bg, `ring-1 ${sc.border}`)} />
+                  <div className={cn('mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0', sc.bg)} />
                   <span className="text-[12px] text-slate-300 leading-snug">{row.threatType}</span>
                 </div>
-
-                {/* Severity */}
-                <div className="pt-0.5">
-                  <SeverityBadge severity={row.severity} />
-                </div>
-
-                {/* Source Tag */}
-                <div className="pt-0.5">
-                  <SourceTag tag={row.sourceTag} />
-                </div>
-
-                {/* AI Explanation */}
+                <div className="pt-0.5"><SeverityBadge severity={row.severity} /></div>
+                <div className="pt-0.5"><SourceTag tag={row.sourceTag} /></div>
                 <div className="flex items-start gap-1.5">
                   <BrainCircuit className="w-3 h-3 text-slate-600 mt-0.5 flex-shrink-0" />
                   <span className="text-[11px] text-slate-500 leading-snug italic">{row.aiExplanation}</span>

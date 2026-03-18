@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { Bell, LogOut } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useEnvironment } from '@/context/EnvironmentContext';
-import { apiGet } from '@/lib/api';
+import { getHeaderData } from '@/lib/apiClient';
 import type { HeaderData } from '@/lib/types';
 import {
   Select,
@@ -32,11 +32,11 @@ import {
 import { cn, getSeverityClassNames } from '@/lib/utils';
 
 const PAGE_TITLES: Record<string, string> = {
-  '/overview': 'Anomaly Command Center',
-  '/network-traffic': 'Network Traffic',
+  '/overview':          'Anomaly Command Center',
+  '/network-traffic':   'Network Traffic',
   '/endpoint-security': 'Endpoint Security',
-  '/incidents': 'Case Management',
-  '/settings': 'Settings',
+  '/incidents':         'Case Management',
+  '/settings':          'Settings',
 };
 
 export function DashboardHeader() {
@@ -52,9 +52,13 @@ export function DashboardHeader() {
     'Dashboard';
 
   useEffect(() => {
-    apiGet<HeaderData>(`/header-data?env=${environment}`)
-      .then(setHeaderData)
+    let cancelled = false;
+
+    getHeaderData()
+      .then((data) => { if (!cancelled) setHeaderData(data); })
       .catch(() => {});
+
+    return () => { cancelled = true; };
   }, [environment]);
 
   const handleLogout = () => {
@@ -80,6 +84,7 @@ export function DashboardHeader() {
       </div>
 
       <div className="flex items-center gap-4">
+
         {/* Environment Selector */}
         <Select
           value={environment}
@@ -159,6 +164,7 @@ export function DashboardHeader() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
       </div>
     </header>
   );
