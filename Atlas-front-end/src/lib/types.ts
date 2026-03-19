@@ -145,6 +145,8 @@ export type WazuhEvent = {
     avatar: string;
     alert: string;
     severity: Severity;
+    /** ISO timestamp — may be absent on legacy ingested records */
+    timestamp?: string;
 };
 
 export type QuarantineRequest = {

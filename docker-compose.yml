@@ -50,7 +50,7 @@ services:
     # To connect with a GUI like pgAdmin or TablePlus:
     #   change the ports block to:  ports: - "5432:5432"
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -76,47 +76,11 @@ services:
       - "8000:8000"     # FastAPI + Swagger UI at http://localhost:8000/docs
     env_file:
       - .env
-    environment:
-      # ── Database ───────────────────────────────────────────────────────────
-      # Uses the service name "postgres" — Docker DNS resolves this automatically.
-      DATABASE_URL: ${DATABASE_URL}
-      DATABASE_URL_SYNC: ${DATABASE_URL_SYNC}
-      DB_POOL_SIZE: ${DB_POOL_SIZE}
-      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW}
-      DB_ECHO_SQL: ${DB_ECHO_SQL}
-
-      # ── Application ────────────────────────────────────────────────────────
-      APP_ENV: ${APP_ENV}
-      DEBUG: ${DEBUG}
-      LOG_DATA_DIR: ${LOG_DATA_DIR}
-      REINGEST_ON_STARTUP: ${REINGEST_ON_STARTUP}
-
-      # ── Auth / Security ────────────────────────────────────────────────────
-      # IMPORTANT: Replace these in production with strong random values.
-      # Generate: python -c "import secrets; print(secrets.token_hex(32))"
-      SECRET_KEY: ${SECRET_KEY}
-      ALGORITHM: ${ALGORITHM}
-      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
-
-      # ── HTTP Ingest (Vector / Fluent Bit) ─────────────────────────────────
-      # Generate: python -c "import secrets; print(secrets.token_urlsafe(48))"
-      INGEST_API_KEY: ${INGEST_API_KEY}
-      INGEST_API_KEY_HEADER: ${INGEST_API_KEY_HEADER}
-
-      # ── Velociraptor webhook ────────────────────────────────────────────────
-      VELOCIRAPTOR_WEBHOOK_SECRET: ${VELOCIRAPTOR_WEBHOOK_SECRET}
-
-      # ── S3 Cold Storage (disabled by default) ─────────────────────────────
-      S3_ENABLED: ${S3_ENABLED}
-      AWS_REGION: ${AWS_REGION}
-      S3_LOG_BUCKET: ${S3_LOG_BUCKET}
-      S3_LOG_PREFIX: ${S3_LOG_PREFIX}
-      S3_POLL_INTERVAL_SECONDS: ${S3_POLL_INTERVAL_SECONDS}
-
     volumes:
       # Log files are read-only from the host so you can edit sample data
       # without rebuilding the container.
       - ./Atlas-back-end/data/logs:/app/data/logs:ro
+    command: sh -c "python init_db.py && uvicorn app.main:app --host 0.0.0.0 --port 8000"  
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 20s

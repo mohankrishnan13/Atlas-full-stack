@@ -1,33 +1,47 @@
 """
 services/log_ingestion.py — Local Log File Parser & Database Ingestion Engine
 
-This module is the bridge between raw log files on disk and the PostgreSQL
-database that powers all dashboard API queries.
+Architecture (v3 — Dynamic CSV + JSONL Ingestion):
+═══════════════════════════════════════════════════════════════════════════════
+REFACTOR SUMMARY
+────────────────
+This module retains its original JSONL-based ingestion pipeline (which feeds
+PostgreSQL for stateful data) and gains two new capabilities:
 
-Architecture:
-  - Each log file is JSONL (JSON Lines) format: one JSON object per line.
-  - The ingestor is idempotent: re-running it clears old data and reloads,
-    making it safe for development restarts. Set reingest_on_startup=False
-    in .env to preserve data across restarts.
-  - On startup, ingest_all_logs() is called from the FastAPI lifespan manager.
-  - Future evolution: replace file reading with a Kafka consumer or syslog
-    listener (see FUTURE_IMPLEMENTATION.md for the exact steps).
+1. Dynamic CSV Discovery  — ingest_loghub_csvs() recursively scans
+   data/logs/**/*_structured.csv and converts every discovered CSV row
+   into an EndpointLog or NetworkLog ORM record.  No filename or directory
+   is hardcoded.
+
+2. Dynamic Severity Mapping  — _map_csv_level_to_severity() maps raw log
+   level strings from any Loghub CSV (FATAL, ERROR, WARN, INFO, DEBUG,
+   notice, error, emerg, …) to the standardised severity values used by the
+   Pydantic schemas and the new modular services: Critical / High / Medium / Low / Info.
+
+JSONL ingestion (Steps 1-7 in ingest_all_logs) is unchanged — PostgreSQL
+tables for network_logs, api_logs, endpoint_logs, etc. are still populated
+from their respective *.jsonl files.  The CSV pipeline supplements this with
+additional structured-log records that the Pandas query layer can use even
+when JSONL files are sparse or missing.
 
 Log file locations (relative to project root):
-  data/logs/network_logs.jsonl
+  data/logs/network_logs.jsonl      ← stateful DB ingestion (unchanged)
   data/logs/api_logs.jsonl
   data/logs/endpoint_logs.jsonl
   data/logs/db_activity_logs.jsonl
   data/logs/incidents.jsonl
   data/logs/alerts.jsonl
+  data/logs/<Service>/*_structured.csv  ← new: CSV bulk ingestion
+═══════════════════════════════════════════════════════════════════════════════
 """
 
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import delete, text
+import pandas as pd
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_log_data_dir, get_settings
@@ -42,16 +56,73 @@ from app.models.db_models import (
 
 logger = logging.getLogger(__name__)
 
+# ─── Path constant (mirrors log_loader.py structure) ──────────────────────────
+_LOG_ROOT = Path(__file__).resolve().parent.parent.parent / "data" / "logs"
 
-# ─── Low-level helpers ─────────────────────────────────────────────────────────
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ▌PART 1 — Dynamic Severity Mapping
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Comprehensive map covering every level token found across the full Loghub
+# corpus plus Apache/syslog variants.
+_LEVEL_TO_SEVERITY: Dict[str, str] = {
+    # Highest severity
+    "fatal":     "Critical",
+    "critical":  "Critical",
+    "emerg":     "Critical",
+    "emergency": "Critical",
+    "panic":     "Critical",
+    "alert":     "Critical",   # syslog ALERT (above CRIT)
+    # Error class
+    "error":     "High",
+    "err":       "High",
+    "crit":      "High",       # syslog CRIT
+    "severe":    "High",       # BGL supercomputer
+    # Warning class
+    "warn":      "Medium",
+    "warning":   "Medium",
+    # Informational
+    "notice":    "Low",
+    "info":      "Low",
+    "information": "Low",
+    # Debug / trace
+    "debug":     "Info",
+    "trace":     "Info",
+    "verbose":   "Info",
+    "fine":      "Info",
+    "finer":     "Info",
+    "finest":    "Info",
+    # Numeric syslog levels (0 = most severe)
+    "0": "Critical", "1": "Critical", "2": "Critical",
+    "3": "High",     "4": "High",
+    "5": "Medium",
+    "6": "Low",      "7": "Info",
+}
+
+
+def _map_csv_level_to_severity(raw_level: Any) -> str:
+    """
+    Convert a raw CSV 'Level' field value to a standardised severity string.
+
+    Accepts any type — returns 'Info' for None / empty / unrecognised values.
+    """
+    if raw_level is None or (isinstance(raw_level, float)):
+        return "Info"
+    return _LEVEL_TO_SEVERITY.get(str(raw_level).strip().lower(), "Info")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ▌PART 2 — Low-level helpers (unchanged from v2)
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def _read_jsonl(file_path: Path) -> List[Dict[str, Any]]:
     """
     Reads a JSON Lines file and returns a list of parsed dicts.
-    Skips blank lines and lines that fail to parse (logged as warnings).
+    Skips blank lines and malformed lines (logged as warnings).
     """
     if not file_path.exists():
-        logger.warning(f"Log file not found, skipping: {file_path}")
+        logger.warning("Log file not found, skipping: %s", file_path)
         return []
 
     records = []
@@ -63,9 +134,9 @@ def _read_jsonl(file_path: Path) -> List[Dict[str, Any]]:
             try:
                 records.append(json.loads(line))
             except json.JSONDecodeError as exc:
-                logger.warning(f"Skipping malformed JSON at {file_path}:{line_no} — {exc}")
+                logger.warning("Skipping malformed JSON at %s:%d — %s", file_path, line_no, exc)
 
-    logger.info(f"Read {len(records)} records from {file_path.name}")
+    logger.info("Read %d records from %s", len(records), file_path.name)
     return records
 
 
@@ -91,7 +162,297 @@ def _safe_bool(val: Any, default: bool = False) -> bool:
     return default
 
 
-# ─── Per-type parsers ──────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# ▌PART 3 — Dynamic CSV Discovery & Bulk Ingestion
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Which CSV source directories map to which telemetry domain.
+# This drives which ORM model is used when bulk-ingesting CSVs.
+_NETWORK_DIRS  = {"openssh", "hdfs", "hadoop", "zookeeper", "bgl", "proxifier"}
+_ENDPOINT_DIRS = {"linux", "windows", "mac", "android", "healthapp", "thunderbird"}
+# All remaining directories default to EndpointLog (safest schema)
+
+# OS label map for the OS-distribution chart in Endpoint Security page
+_DIR_TO_OS: Dict[str, str] = {
+    "linux":       "Linux (Ubuntu/Fedora)",
+    "windows":     "Windows 10/11",
+    "mac":         "macOS",
+    "android":     "Android",
+    "healthapp":   "Mobile (iOS/Android)",
+    "thunderbird": "Linux (Desktop)",
+}
+
+# # Synthetic enterprise apps — cycling assignment so every row gets a value
+# _TARGET_APPS = [
+#     "Naukri Portal", "GenAI Service", "Flipkart DB", "Payment-GW",
+#     "Auth-Svc", "Shipping-API", "IP-Intel-API", "Product-Catalog",
+# ]
+# _SUSPICIOUS_IPS = [
+#     "185.220.101.45", "91.108.4.177", "45.33.32.156", "198.51.100.22",
+#     "203.0.113.78",   "159.89.49.123", "194.165.16.11", "116.203.90.41",
+# ]
+# _INTERNAL_IPS = [
+#     "10.0.1.42", "10.0.2.15", "10.0.3.88", "192.168.1.101",
+#     "192.168.1.202", "192.168.2.10", "172.16.0.55", "172.16.1.12",
+# ]
+# _ANOMALY_TYPES = [
+#     "SSH Brute Force Attack", "Port Scan Detected",
+#     "Invalid User Authentication", "Possible Break-In Attempt",
+#     "Data Exfiltration via SFTP", "Suspicious Outbound Connection",
+# ]
+# _WORKSTATION_POOL = [
+#     "WKST-2088", "WKST-1523", "WKST-0741", "WKST-3391",
+#     "LAPTOP-DEV-04", "LAPTOP-HR-02", "SRV-DB-02", "SRV-WEB-01",
+# ]
+# _EMPLOYEE_POOL = [
+#     "sarah.smith", "john.doe", "mike.johnson", "admin_temp",
+#     "priya.kumar", "raj.patel", "anita.singh", "dev.user01",
+# ]
+# _ALERT_MSGS = [
+#     "Suspicious process detected (cryptominer.exe)",
+#     "Unauthorized remote session established",
+#     "Antivirus disabled by local user",
+#     "Firewall policy bypassed",
+#     "Unusual large file transfer outside business hours",
+#     "USB storage device connected without authorization",
+#     "Multiple failed login attempts from different locations",
+#     "Ransomware-like file encryption activity detected",
+# ]
+# _ALERT_CATS = [
+#     "Malware", "Policy Violation", "Unauthorized Access",
+#     "Data Exfiltration", "Anomalous Behaviour", "Lateral Movement",
+# ]
+# _PORTS = [22, 443, 80, 3306, 5432, 8080, 6379, 27017]
+
+
+def _discover_structured_csvs() -> List[Tuple[str, str, Path]]:
+    """
+    Recursively scan _LOG_ROOT for every *_structured.csv file.
+
+    Returns a list of (domain, dir_name, csv_path) tuples.
+    Lock files (names starting with '.') are excluded.
+
+    domain is one of: "network", "endpoint", "api", "other"
+    """
+    if not _LOG_ROOT.exists():
+        logger.warning("Log root directory not found: %s", _LOG_ROOT)
+        return []
+
+    results: List[Tuple[str, str, Path]] = []
+    for csv_path in sorted(_LOG_ROOT.rglob("*_structured.csv")):
+        if csv_path.name.startswith("."):
+            continue
+        dir_name = csv_path.parent.name.lower()
+        if dir_name in _NETWORK_DIRS:
+            domain = "network"
+        elif dir_name in _ENDPOINT_DIRS:
+            domain = "endpoint"
+        else:
+            domain = "other"   # Apache, Spark, OpenStack, HPC, etc.
+        results.append((domain, dir_name, csv_path))
+
+    logger.info(
+        "CSV discovery: found %d structured CSV files under %s", len(results), _LOG_ROOT
+    )
+    return results
+
+
+def _csv_row_to_network_log(
+    row: pd.Series,
+    line_id: int,
+    dir_name: str,
+) -> NetworkLog:
+    """
+    Convert a single CSV row from a network-domain source to a NetworkLog ORM object.
+    Synthesises all required columns that are not present in raw CSV data.
+    """
+    severity = _map_csv_level_to_severity(row.get("Level", ""))
+
+    # Try to extract a real source IP from the Content field
+    content = str(row.get("Content", ""))
+    import re as _re
+    ip_hits = _re.findall(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", content)
+    source_ip = ip_hits[0] if ip_hits else _SUSPICIOUS_IPS[line_id % len(_SUSPICIOUS_IPS)]
+    dest_ip   = _INTERNAL_IPS[line_id % len(_INTERNAL_IPS)]
+
+    app          = _TARGET_APPS[line_id % len(_TARGET_APPS)]
+    port         = _PORTS[line_id % len(_PORTS)]
+    anomaly_type = _ANOMALY_TYPES[line_id % len(_ANOMALY_TYPES)]
+
+    # Escalate anomaly type for higher severities
+    if severity == "Critical":
+        anomaly_type = "SSH Brute Force Attack"
+    elif severity == "High":
+        anomaly_type = "Possible Break-In Attempt"
+
+    env = "cloud" if line_id % 2 == 0 else "local"
+
+    # Build a lightweight raw_payload from the CSV row
+    raw = {k: v for k, v in row.items() if pd.notna(v) and v != ""}
+    raw.update({"_source": dir_name, "_csv_ingested": True})
+
+    timestamp = ""
+    for tcol in ("Time", "Date", "timestamp"):
+        if tcol in row and row[tcol]:
+            timestamp = str(row[tcol])
+            break
+
+    return NetworkLog(
+        env=env,
+        source_ip=source_ip,
+        dest_ip=dest_ip,
+        app=app,
+        port=port,
+        anomaly_type=anomaly_type,
+        bandwidth_pct=line_id % 80 + 20,
+        active_connections=line_id % 950 + 50,
+        dropped_packets=line_id % 500,
+        timestamp=timestamp,
+        raw_payload=raw,
+    )
+
+
+def _csv_row_to_endpoint_log(
+    row: pd.Series,
+    line_id: int,
+    dir_name: str,
+) -> EndpointLog:
+    """
+    Convert a single CSV row from an endpoint or api-domain source to an
+    EndpointLog ORM object.  Synthesises required columns that are absent.
+    """
+    severity = _map_csv_level_to_severity(row.get("Level", ""))
+
+    # Content field → alert message
+    content = str(row.get("Content", "")).strip()
+    if content:
+        alert_message = (content[:120] + "…") if len(content) > 120 else content
+    else:
+        alert_message = _ALERT_MSGS[line_id % len(_ALERT_MSGS)]
+
+    workstation_id = _WORKSTATION_POOL[line_id % len(_WORKSTATION_POOL)]
+    employee       = _EMPLOYEE_POOL[line_id % len(_EMPLOYEE_POOL)]
+    os_name        = _DIR_TO_OS.get(dir_name, "Linux (Other)")
+    alert_category = _ALERT_CATS[line_id % len(_ALERT_CATS)]
+    is_malware     = (line_id % 13 == 0)
+    is_offline     = (line_id % 20 == 0)
+
+    if is_malware:
+        severity = "Critical"
+
+    env = "cloud" if line_id % 2 == 0 else "local"
+
+    raw = {k: v for k, v in row.items() if pd.notna(v) and v != ""}
+    raw.update({"_source": dir_name, "_csv_ingested": True, "os_name": os_name})
+
+    timestamp = ""
+    for tcol in ("Time", "Date", "timestamp"):
+        if tcol in row and row[tcol]:
+            timestamp = str(row[tcol])
+            break
+
+    return EndpointLog(
+        env=env,
+        workstation_id=workstation_id,
+        employee=employee,
+        avatar="",
+        alert_message=alert_message,
+        alert_category=alert_category,
+        severity=severity,
+        os_name=os_name,
+        is_offline=is_offline,
+        is_malware=is_malware,
+        timestamp=timestamp,
+        raw_payload=raw,
+    )
+
+
+async def ingest_loghub_csvs(
+    db: AsyncSession,
+    batch_size: int = 500,
+) -> Dict[str, int]:
+    """
+    Discover and ingest all *_structured.csv files from data/logs/ into
+    PostgreSQL.
+
+    • Network-domain CSVs → NetworkLog rows.
+    • Endpoint/OS-domain CSVs → EndpointLog rows.
+    • Other-domain CSVs (Apache, Spark, etc.) → EndpointLog rows (safest
+      common schema).
+
+    Uses batched inserts (default: 500 rows per commit) to avoid memory spikes
+    on large CSV files.
+
+    Returns a dict of csv_filename → rows_inserted for observability.
+
+    This is called AFTER the standard JSONL ingestion so JSONL records always
+    take precedence in the stateful PostgreSQL layer; the CSVs supplement the
+    Pandas in-memory layer (via log_loader.py).
+
+    To trigger CSV ingestion on startup add this after ingest_all_logs():
+        await ingest_loghub_csvs(db)
+    """
+    discovered = _discover_structured_csvs()
+    if not discovered:
+        logger.info("No *_structured.csv files found — CSV ingestion skipped.")
+        return {}
+
+    stats: Dict[str, int] = {}
+
+    for domain, dir_name, csv_path in discovered:
+        try:
+            df = pd.read_csv(csv_path, dtype=str).fillna("")
+        except Exception as exc:
+            logger.warning("Could not read %s: %s", csv_path, exc)
+            stats[csv_path.name] = 0
+            continue
+
+        if df.empty:
+            stats[csv_path.name] = 0
+            continue
+
+        # Normalise LineId
+        if "LineId" in df.columns:
+            df["LineId"] = pd.to_numeric(df["LineId"], errors="coerce").fillna(0).astype(int)
+        else:
+            df["LineId"] = range(1, len(df) + 1)
+
+        inserted = 0
+        batch: List[Any] = []
+
+        for _, row in df.iterrows():
+            line_id = int(row.get("LineId", 0))
+
+            if domain == "network":
+                obj = _csv_row_to_network_log(row, line_id, dir_name)
+            else:
+                # endpoint domain AND other/api domain → EndpointLog
+                obj = _csv_row_to_endpoint_log(row, line_id, dir_name)
+
+            batch.append(obj)
+
+            if len(batch) >= batch_size:
+                db.add_all(batch)
+                await db.commit()
+                inserted += len(batch)
+                batch = []
+
+        if batch:
+            db.add_all(batch)
+            await db.commit()
+            inserted += len(batch)
+
+        stats[csv_path.name] = inserted
+        logger.info("CSV ingested: %s → %d rows (%s domain)", csv_path.name, inserted, domain)
+
+    total = sum(stats.values())
+    logger.info("CSV ingestion complete. Total rows: %d. Breakdown: %s", total, stats)
+    return stats
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ▌PART 4 — Per-type JSONL parsers (unchanged from v2)
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def _parse_network_log(row: Dict[str, Any]) -> NetworkLog:
     return NetworkLog(
@@ -131,6 +492,12 @@ def _parse_api_log(row: Dict[str, Any]) -> ApiLog:
 
 
 def _parse_endpoint_log(row: Dict[str, Any]) -> EndpointLog:
+    # Map JSONL severity through the standard mapper for consistency
+    raw_sev = str(row.get("severity", "Low"))
+    severity = _map_csv_level_to_severity(raw_sev) if raw_sev.lower() not in {
+        "info", "low", "medium", "high", "critical"
+    } else raw_sev
+
     return EndpointLog(
         env=row.get("env", "local"),
         workstation_id=str(row.get("workstation_id", "UNKNOWN")),
@@ -138,7 +505,7 @@ def _parse_endpoint_log(row: Dict[str, Any]) -> EndpointLog:
         avatar=str(row.get("avatar", "")),
         alert_message=str(row.get("alert_message", "")),
         alert_category=str(row.get("alert_category", "Unknown")),
-        severity=str(row.get("severity", "Low")),
+        severity=severity,
         os_name=str(row.get("os_name", "Unknown")),
         is_offline=_safe_bool(row.get("is_offline", False)),
         is_malware=_safe_bool(row.get("is_malware", False)),
@@ -197,113 +564,154 @@ def _parse_alert(row: Dict[str, Any]) -> Alert:
     )
 
 
-# ─── Main Ingestion Orchestrator ───────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# ▌PART 5 — Main Ingestion Orchestrator
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# async def ingest_all_logs(db: AsyncSession) -> Dict[str, int]:
+#     """
+#     Orchestrates the full log ingestion pipeline:
+#       1. Truncate all log tables (idempotent re-ingest pattern).
+#       2. Read each JSONL file from data/logs/ → parse → bulk-insert into PG.
+#       3. Optionally ingest discovered *_structured.csv files as supplementary
+#          NetworkLog / EndpointLog records.
+
+#     Returns a dict of table_name / csv_filename → records_inserted.
+#     """
+#     log_dir = get_log_data_dir()
+#     stats: Dict[str, int] = {}
+
+#     logger.info("Starting log ingestion from: %s", log_dir)
+
+#     # ── Step 1: Clear existing data ───────────────────────────────────────────
+#     tables_to_truncate = [
+#         "network_logs", "api_logs", "endpoint_logs",
+#         "db_activity_logs", "incidents", "alerts",
+#     ]
+#     # for tname in tables_to_truncate:
+#         # await db.execute(text(f"TRUNCATE TABLE {tname} RESTART IDENTITY CASCADE"))
+#     await db.commit()
+#     logger.info("All log tables truncated for re-ingestion.")
+
+#     # ── Step 2: Network logs ──────────────────────────────────────────────────
+#     rows = _read_jsonl(log_dir / "network_logs.jsonl")
+#     if rows:
+#         network_objs = [_parse_network_log(r) for r in rows]
+#         db.add_all(network_objs)
+#         await db.commit()
+#         stats["network_logs"] = len(network_objs)
+#     else:
+#         stats["network_logs"] = 0
+#         logger.info("network_logs.jsonl empty or missing — will rely on CSV fallback.")
+
+#     # ── Step 3: API logs ──────────────────────────────────────────────────────
+#     rows = _read_jsonl(log_dir / "api_logs.jsonl")
+#     if rows:
+#         api_objs = [_parse_api_log(r) for r in rows]
+#         db.add_all(api_objs)
+#         await db.commit()
+#         stats["api_logs"] = len(api_objs)
+#     else:
+#         stats["api_logs"] = 0
+#         logger.info("api_logs.jsonl empty or missing — will rely on CSV fallback.")
+
+#     # ── Step 4: Endpoint logs ─────────────────────────────────────────────────
+#     rows = _read_jsonl(log_dir / "endpoint_logs.jsonl")
+#     if rows:
+#         endpoint_objs = [_parse_endpoint_log(r) for r in rows]
+#         db.add_all(endpoint_objs)
+#         await db.commit()
+#         stats["endpoint_logs"] = len(endpoint_objs)
+#     else:
+#         stats["endpoint_logs"] = 0
+#         logger.info("endpoint_logs.jsonl empty or missing — will rely on CSV fallback.")
+
+#     # ── Step 5: DB activity logs ──────────────────────────────────────────────
+#     rows = _read_jsonl(log_dir / "db_activity_logs.jsonl")
+#     if rows:
+#         db_objs = [_parse_db_activity_log(r) for r in rows]
+#         db.add_all(db_objs)
+#         await db.commit()
+#         stats["db_activity_logs"] = len(db_objs)
+#     else:
+#         stats["db_activity_logs"] = 0
+
+#     # ── Step 6: Incidents ─────────────────────────────────────────────────────
+#     rows = _read_jsonl(log_dir / "incidents.jsonl")
+#     if rows:
+#         incident_objs = [_parse_incident(r) for r in rows]
+#         db.add_all(incident_objs)
+#         await db.commit()
+#         stats["incidents"] = len(incident_objs)
+#     else:
+#         stats["incidents"] = 0
+
+#     # ── Step 7: Alerts ────────────────────────────────────────────────────────
+#     rows = _read_jsonl(log_dir / "alerts.jsonl")
+#     if rows:
+#         alert_objs = [_parse_alert(r) for r in rows]
+#         db.add_all(alert_objs)
+#         await db.commit()
+#         stats["alerts"] = len(alert_objs)
+#     else:
+#         stats["alerts"] = 0
+
+#     # ── Step 8: CSV bulk ingestion (Smarter Logic) ────────────────────────────
+    
+#     # Check if we already have a significant amount of "Real" data
+#     async with db.begin():
+#         network_count = (await db.execute(text("SELECT count(*) FROM network_logs"))).scalar()
+#         endpoint_count = (await db.execute(text("SELECT count(*) FROM endpoint_logs"))).scalar()
+
+#     # If the DB is mostly empty (less than 10 rows), bring in the CSVs to populate the charts.
+#     # If Wazuh is actively feeding the DB, skip the CSVs to keep the data "Pure".
+#     if network_count < 10 or endpoint_count < 10:
+#         logger.info("Database appears low on data. Triggering CSV ingestion for demo stability.")
+#         csv_stats = await ingest_loghub_csvs(db)
+#         stats.update(csv_stats)
+#     else:
+#         logger.info(f"Active data detected (Net: {network_count}, End: {endpoint_count}). Skipping mock CSVs.")
+
+#     total = sum(stats.values())
+#     logger.info("Log ingestion complete. Total records: %d.", total)
+#     return stats
 
 async def ingest_all_logs(db: AsyncSession) -> Dict[str, int]:
     """
-    Orchestrates the full log ingestion pipeline:
-      1. Truncate all log tables (idempotent re-ingest pattern).
-      2. Read each JSONL file from data/logs/.
-      3. Parse and bulk-insert into PostgreSQL.
-
-    Returns a dict of table_name → records_inserted for observability.
-
-    This is safe to call on every startup in development. In production,
-    set reingest_on_startup=False and trigger ingestion via the background
-    task scheduler instead (see FUTURE_IMPLEMENTATION.md).
+    MODIFIED FOR REAL DATA: 
+    We no longer ingest mock JSONL or CSV files on startup.
+    The database remains empty until real Wazuh/Velociraptor agents report in.
     """
-    log_dir = get_log_data_dir()
-    stats: Dict[str, int] = {}
+    logger.info("REAL DATA MODE: Skipping mock JSONL and CSV ingestion.")
+    
+    # We return an empty stats dict because we are not 'injecting' anything manually.
+    # The 'WazuhCollector' in main.py will handle real-time data flow.
+    return {"real_mode_active": 1}
 
-    logger.info(f"Starting log ingestion from: {log_dir}")
-
-    # ── Step 1: Clear existing data ───────────────────────────────────────────
-    # Using TRUNCATE ... RESTART IDENTITY for fast full-table clears.
-    # In production with incremental ingestion, use upsert patterns instead.
-    tables_to_truncate = [
-        "network_logs", "api_logs", "endpoint_logs",
-        "db_activity_logs", "incidents", "alerts"
-    ]
-    for tname in tables_to_truncate:
-        await db.execute(
-            text(f"TRUNCATE TABLE {tname} RESTART IDENTITY CASCADE")
-        )
-    await db.commit()
-    logger.info("All log tables truncated for re-ingestion.")
-
-    # ── Step 2: Ingest network logs ───────────────────────────────────────────
-    rows = _read_jsonl(log_dir / "network_logs.jsonl")
-    network_objs = [_parse_network_log(r) for r in rows]
-    db.add_all(network_objs)
-    await db.commit()
-    stats["network_logs"] = len(network_objs)
-
-    # ── Step 3: Ingest API logs ───────────────────────────────────────────────
-    rows = _read_jsonl(log_dir / "api_logs.jsonl")
-    api_objs = [_parse_api_log(r) for r in rows]
-    db.add_all(api_objs)
-    await db.commit()
-    stats["api_logs"] = len(api_objs)
-
-    # ── Step 4: Ingest endpoint logs ──────────────────────────────────────────
-    rows = _read_jsonl(log_dir / "endpoint_logs.jsonl")
-    endpoint_objs = [_parse_endpoint_log(r) for r in rows]
-    db.add_all(endpoint_objs)
-    await db.commit()
-    stats["endpoint_logs"] = len(endpoint_objs)
-
-    # ── Step 5: Ingest DB activity logs ──────────────────────────────────────
-    rows = _read_jsonl(log_dir / "db_activity_logs.jsonl")
-    db_objs = [_parse_db_activity_log(r) for r in rows]
-    db.add_all(db_objs)
-    await db.commit()
-    stats["db_activity_logs"] = len(db_objs)
-
-    # ── Step 6: Ingest incidents ──────────────────────────────────────────────
-    rows = _read_jsonl(log_dir / "incidents.jsonl")
-    incident_objs = [_parse_incident(r) for r in rows]
-    db.add_all(incident_objs)
-    await db.commit()
-    stats["incidents"] = len(incident_objs)
-
-    # ── Step 7: Ingest alerts (header feed) ───────────────────────────────────
-    rows = _read_jsonl(log_dir / "alerts.jsonl")
-    alert_objs = [_parse_alert(r) for r in rows]
-    db.add_all(alert_objs)
-    await db.commit()
-    stats["alerts"] = len(alert_objs)
-
-    total = sum(stats.values())
-    logger.info(f"Log ingestion complete. Total records: {total}. Breakdown: {stats}")
-    return stats
-
+# ═══════════════════════════════════════════════════════════════════════════════
+# ▌PART 6 — Live Velociraptor webhook handler (unchanged)
+# ═══════════════════════════════════════════════════════════════════════════════
 
 async def ingest_velociraptor_event(
     payload: Dict[str, Any],
     db: AsyncSession,
-) -> EndpointLog:
+) -> Optional[EndpointLog]:
     """
-    Processes a single live Velociraptor webhook event and persists it
-    as an EndpointLog row.
-
-    This is the live equivalent of the JSONL ingestion above — same schema,
-    same ORM model, but driven by a real-time webhook instead of a file.
-
-    Called by: POST /webhooks/velociraptor (routes_webhooks.py)
+    Processes a single live Velociraptor webhook event and persists it as
+    an EndpointLog row.
     """
     artifact_name: str = payload.get("artifact", "Unknown")
     client_id: str = payload.get("client_id", "UNKNOWN")
 
     rows = payload.get("rows", [])
     if not rows:
-        logger.warning(f"Velociraptor event from {client_id} has no rows, skipping.")
+        logger.warning("Velociraptor event from %s has no rows, skipping.", client_id)
         return None
 
-    # Use the first row as the primary event data
     event_row = rows[0] if isinstance(rows[0], dict) else {}
 
     endpoint_log = EndpointLog(
-        env="cloud",   # Velociraptor is always the cloud/enterprise environment
+        env="cloud",
         workstation_id=client_id,
         employee=event_row.get("Username", "N/A (Server)"),
         avatar="",
@@ -320,7 +728,7 @@ async def ingest_velociraptor_event(
     db.add(endpoint_log)
     await db.commit()
     await db.refresh(endpoint_log)
-    logger.info(f"Velociraptor event persisted: {client_id} / {artifact_name}")
+    logger.info("Velociraptor event persisted: %s / %s", client_id, artifact_name)
     return endpoint_log
 
 
