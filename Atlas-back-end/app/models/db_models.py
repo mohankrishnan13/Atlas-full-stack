@@ -136,8 +136,7 @@ class ApiLog(Base):
 class EndpointLog(Base):
     """
     Endpoint security events — workstation alerts, malware, policy violations.
-    Populated by log_ingestion (JSONL), ingest_loghub (Linux/Windows/Mac CSV),
-    and live Velociraptor webhooks.
+    Populated by log_ingestion (JSONL), ingest_loghub (Linux/Windows/Mac CSV).
     Hot-path reads served by Pandas (_build_endpoint_df).
     """
     __tablename__ = "endpoint_logs"

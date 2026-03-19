@@ -1,65 +1,53 @@
-# ATLAS Backend Dependencies — PostgreSQL + Velociraptor Stack
-# Python 3.11+
-# Generated for the refactored MVP replacing Elasticsearch/Wazuh
+# ══════════════════════════════════════════════════════════════════════════════
+# ATLAS SOC Dashboard — Python Dependencies
+# Generated from full codebase analysis (Python 3.12)
+# ══════════════════════════════════════════════════════════════════════════════
 
-# ── Web Framework ─────────────────────────────────────────────────────────────
-fastapi==0.111.0
-uvicorn[standard]==0.29.0
-numpy
-pandas
-requests
+# ── Web Framework ──────────────────────────────────────────────────────────────
+fastapi==0.115.5
+uvicorn[standard]==0.32.1          # ASGI server with websocket + http/2 extras
 
-# ── Data Validation & Settings ────────────────────────────────────────────────
-pydantic==2.7.1
-pydantic-settings==2.2.1
+# ── Pydantic / Settings ────────────────────────────────────────────────────────
+pydantic==2.10.3                   # Data validation (v2 — field_validator API)
+pydantic[email]==2.10.3            # EmailStr support used in routes_auth.py
+pydantic-settings==2.6.1          # BaseSettings + SettingsConfigDict (core/config.py)
 
-# ── PostgreSQL (async driver + ORM) ──────────────────────────────────────────
-# asyncpg: the fastest async PostgreSQL driver for Python
-asyncpg==0.29.0
-# SQLAlchemy with async support
-sqlalchemy[asyncio]==2.0.30
-# psycopg2 is needed only for Alembic migrations (sync)
-psycopg2-binary==2.9.9
-sqlalchemy
-python-dotenv
+# ── Database — Async ORM ────────────────────────────────────────────────────────
+sqlalchemy==2.0.36                 # ORM: Mapped, mapped_column, async_sessionmaker
+asyncpg==0.30.0                    # Async PostgreSQL driver (postgresql+asyncpg://)
 
-# ── Database Migrations ───────────────────────────────────────────────────────
-alembic==1.13.1
+# ── Database — Sync (Alembic migrations only) ───────────────────────────────────
+psycopg2-binary==2.9.10            # Sync driver for DATABASE_URL_SYNC (Alembic CLI)
+alembic==1.14.0                    # Schema migrations
 
-# ── HTTP Client (for Ollama LLM Copilot + Velociraptor gRPC bridge) ──────────
-httpx==0.27.0
+# ── Authentication / Security ──────────────────────────────────────────────────
+python-jose[cryptography]==3.3.0   # JWT encode/decode (create_access_token)
+passlib[bcrypt]==1.7.4             # Password hashing: hash_password / verify_password
+bcrypt==4.2.1                      # bcrypt backend for passlib
 
-# ── Security / Auth ───────────────────────────────────────────────────────────
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-bcrypt<4.0.0
-python-multipart==0.0.9
+# ── HTTP Client (Wazuh active-response calls) ───────────────────────────────────
+requests==2.32.3                   # WazuhActions.run_command (core/wazuh_client.py)
+urllib3==2.2.3                     # InsecureRequestWarning suppression (wazuh_client)
 
-# ── Logging ───────────────────────────────────────────────────────────────────
-python-json-logger==2.0.7
+# ── Environment / Config ────────────────────────────────────────────────────────
+python-dotenv==1.0.1               # load_dotenv() in core/config.py
 
-# ── Testing ───────────────────────────────────────────────────────────────────
-pytest==8.2.0
-pytest-asyncio==0.23.6
-# httpx doubles as async test client for FastAPI
-# (already listed above, no duplicate needed)
+# ── Async Utilities ─────────────────────────────────────────────────────────────
+anyio==4.7.0                       # Async backend used by FastAPI / Starlette
 
-# ── Future: Kafka Consumer (uncomment when moving to live ingestion) ──────────
-# aiokafka==0.10.0
+# ── AWS S3 Cold-Storage (optional, enabled via S3_ENABLED=true) ─────────────────
+boto3==1.35.83                     # S3IngestCursor background polling task
 
-# ── Future: Velociraptor gRPC client (uncomment when connecting live server) ──
-# grpcio==1.63.0
-# grpcio-tools==1.63.0
-# pyvelociraptor>=0.1.0  # Community wrapper — check latest version
+# ── LLM Copilot — Ollama (optional) ────────────────────────────────────────────
+httpx==0.28.1                      # Async HTTP client for Ollama REST calls
 
-# ── AWS S3 Cold-Storage Ingestion ─────────────────────────────────────────────
-# boto3 is always installed; the S3 task only activates when S3_ENABLED=true.
-boto3==1.34.120
-botocore==1.34.120
+# ── Data Processing (used by query/log services referenced in routes_dashboard) ──
+pandas==2.2.3                      # In-memory analytics engine (log_loader, _build_*_df)
+numpy==2.2.0                       # Numerical ops used alongside pandas
 
-# ── REMOVED dependencies (do NOT re-add these) ───────────────────────────────
-# elasticsearch[async]  ← replaced by PostgreSQL
-# redis                 ← no longer needed (session state in DB)
-# scikit-learn          ← ML engine removed from MVP (future roadmap item)
-# pandas                ← removed with ML engine
-# numpy                 ← removed with ML engine
+# ── Dev / Debug ─────────────────────────────────────────────────────────────────
+# Uncomment in non-production builds only
+# watchfiles==0.24.0               # Hot-reload for uvicorn --reload
+# pytest==8.3.4
+# pytest-asyncio==0.24.0
+# httpx==0.28.1                    # Also used as test client via TestClient

@@ -189,19 +189,6 @@ class Settings(BaseSettings):
         return _reject_placeholder("WAZUH_INDEXER_PASSWORD", v)
 
     # ─────────────────────────────────────────────────────────────
-    # Velociraptor
-    # ─────────────────────────────────────────────────────────────
-
-    velociraptor_webhook_secret: str
-    velociraptor_api_url: str = ""
-    velociraptor_api_key: str = ""
-
-    @field_validator("velociraptor_webhook_secret", mode="after")
-    @classmethod
-    def validate_velo_secret(cls, v: str):
-        return _reject_placeholder("VELOCIRAPTOR_WEBHOOK_SECRET", v)
-
-    # ─────────────────────────────────────────────────────────────
     # LLM Copilot
     # ─────────────────────────────────────────────────────────────
 

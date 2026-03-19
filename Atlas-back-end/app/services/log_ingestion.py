@@ -680,69 +680,10 @@ async def ingest_all_logs(db: AsyncSession) -> Dict[str, int]:
     """
     MODIFIED FOR REAL DATA: 
     We no longer ingest mock JSONL or CSV files on startup.
-    The database remains empty until real Wazuh/Velociraptor agents report in.
+    The database remains empty until real Wazuh agents report in.
     """
     logger.info("REAL DATA MODE: Skipping mock JSONL and CSV ingestion.")
     
     # We return an empty stats dict because we are not 'injecting' anything manually.
     # The 'WazuhCollector' in main.py will handle real-time data flow.
     return {"real_mode_active": 1}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# ▌PART 6 — Live Velociraptor webhook handler (unchanged)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-async def ingest_velociraptor_event(
-    payload: Dict[str, Any],
-    db: AsyncSession,
-) -> Optional[EndpointLog]:
-    """
-    Processes a single live Velociraptor webhook event and persists it as
-    an EndpointLog row.
-    """
-    artifact_name: str = payload.get("artifact", "Unknown")
-    client_id: str = payload.get("client_id", "UNKNOWN")
-
-    rows = payload.get("rows", [])
-    if not rows:
-        logger.warning("Velociraptor event from %s has no rows, skipping.", client_id)
-        return None
-
-    event_row = rows[0] if isinstance(rows[0], dict) else {}
-
-    endpoint_log = EndpointLog(
-        env="cloud",
-        workstation_id=client_id,
-        employee=event_row.get("Username", "N/A (Server)"),
-        avatar="",
-        alert_message=event_row.get("Message", artifact_name),
-        alert_category=_classify_velociraptor_artifact(artifact_name),
-        severity=event_row.get("Severity", "Medium"),
-        os_name=event_row.get("OS", "Unknown"),
-        is_offline=False,
-        is_malware="malware" in artifact_name.lower() or "ransomware" in artifact_name.lower(),
-        timestamp=payload.get("timestamp", ""),
-        raw_payload=payload,
-    )
-
-    db.add(endpoint_log)
-    await db.commit()
-    await db.refresh(endpoint_log)
-    logger.info("Velociraptor event persisted: %s / %s", client_id, artifact_name)
-    return endpoint_log
-
-
-def _classify_velociraptor_artifact(artifact_name: str) -> str:
-    """Maps Velociraptor artifact names to ATLAS alert categories."""
-    name = artifact_name.lower()
-    if "brute" in name or "ssh" in name:
-        return "SSH Brute Force"
-    if "malware" in name or "yara" in name or "ransomware" in name:
-        return "Malware"
-    if "rootkit" in name or "diamorphine" in name:
-        return "Rootkit Detected"
-    if "network" in name or "connection" in name or "dns" in name:
-        return "Anomalous outbound"
-    if "policy" in name or "usb" in name or "removable" in name:
-        return "Policy Violation"
-    return "Anomalous Activity"

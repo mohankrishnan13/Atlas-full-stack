@@ -4,29 +4,22 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  Shield,
-  LayoutDashboard,
-  Activity,
-  Network,
-  Laptop,
-  Database,
-  AlertTriangle,
-  FileText,
-  Settings,
-  ChevronLeft,
-  ChevronRight,
+  Shield, LayoutDashboard, Activity, Network,
+  Laptop, Database, AlertTriangle, FileText, Settings,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
+// All dashboard routes — Database Monitoring is fully enabled (was previously commented out)
 const navItems = [
-  { icon: LayoutDashboard, label: 'Overview', href: '/overview' },
-  { icon: Activity, label: 'API Monitoring', href: '/api-monitoring' },
-  { icon: Network, label: 'Network Traffic', href: '/network-traffic' },
-  { icon: Laptop, label: 'Endpoint Security', href: '/endpoint-security' },
-  // { icon: Database, label: 'Database Monitoring', href: '/database-monitoring' },
-  { icon: AlertTriangle, label: 'Case Management', href: '/incidents' },
-  { icon: FileText, label: 'Reports', href: '/reports' },
-  { icon: Settings, label: 'Settings', href: '/settings' },
+  { icon: LayoutDashboard, label: 'Overview',              href: '/overview' },
+  { icon: Activity,        label: 'API Monitoring',        href: '/api-monitoring' },
+  { icon: Network,         label: 'Network Traffic',       href: '/network-traffic' },
+  { icon: Laptop,          label: 'Endpoint Security',     href: '/endpoint-security' },
+  { icon: Database,        label: 'Database Monitoring',   href: '/database-monitoring' },
+  { icon: AlertTriangle,   label: 'Case Management',       href: '/incidents' },
+  { icon: FileText,        label: 'Reports',               href: '/reports' },
+  { icon: Settings,        label: 'Settings',              href: '/settings' },
 ];
 
 export function DashboardSidebar() {
@@ -37,10 +30,9 @@ export function DashboardSidebar() {
     <aside
       className={cn(
         'bg-slate-900 border-r border-slate-800 transition-all duration-300 flex flex-col flex-shrink-0',
-        collapsed ? 'w-20' : 'w-[260px]'
+        collapsed ? 'w-20' : 'w-[260px]',
       )}
     >
-      {/* Logo */}
       <div className="h-16 flex items-center justify-between px-4 border-b border-slate-800">
         {!collapsed ? (
           <div className="flex items-center gap-3">
@@ -59,7 +51,6 @@ export function DashboardSidebar() {
         )}
       </div>
 
-      {/* Nav */}
       <nav className="flex-1 py-4 px-2">
         {navItems.map((item) => {
           const isActive = pathname.startsWith(item.href);
@@ -71,7 +62,7 @@ export function DashboardSidebar() {
                 'flex items-center gap-3 px-3 py-2.5 mb-1 rounded-lg transition-all relative',
                 isActive
                   ? 'bg-blue-500/10 text-blue-400'
-                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200',
               )}
             >
               {isActive && (
@@ -84,11 +75,11 @@ export function DashboardSidebar() {
         })}
       </nav>
 
-      {/* Collapse Toggle */}
       <div className="p-2 border-t border-slate-800">
         <button
           onClick={() => setCollapsed(!collapsed)}
           className="w-full flex items-center justify-center p-2 hover:bg-slate-800 rounded-lg transition-colors"
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {collapsed ? (
             <ChevronRight className="w-5 h-5 text-slate-400" />
