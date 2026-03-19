@@ -2,17 +2,22 @@
 api/routes_actions.py — SOC Mitigation Actions (Write)
 
 Every action endpoint:
-  1. Executes the mitigation (Wazuh active response or DB operation).
-  2. Persists a MitigationAuditLog row so there is a permanent, queryable
-     record of every analyst action — who did what, when, and against what.
-  3. On remediate with status "Closed", stamps Incident.resolved_at so that
-     MTTR calculation in the new modular services has real timestamps to work with.
+  1. Executes the mitigation (Wazuh active response or DB state change).
+  2. Persists a MitigationAuditLog row — permanent, queryable record of
+     every analyst action: who, what, when, against what.
+  3. On remediate with status "Closed", stamps Incident.resolved_at so
+     MTTR calculation in incidents_service has real timestamps.
 
-Security changes
-────────────────
-• Added missing import for WazuhActions.
-• Removed hardcoded "YOUR_LAPTOP_IP" / "YOUR_MANAGER_IP" placeholder strings.
-  WazuhActions() now reads host/credentials exclusively from Settings (.env).
+REMOVED in Anomaly Command Center pivot:
+  POST /settings/apps/{app_id}/quarantine/lift — QuarantinedEndpoint deleted
+  POST /db-monitoring/kill-query              — DB Monitoring domain retired
+  POST /reports/generate                      — Reports domain retired
+
+Active endpoints:
+  POST /api-monitoring/block-route   — audit-only (no live enforcement yet)
+  POST /network-traffic/block        — audit-only (no live enforcement yet)
+  POST /endpoint-security/quarantine — sends Wazuh active-response command
+  POST /incidents/remediate          — status transition + optional Wazuh isolation
 """
 
 import logging
@@ -23,20 +28,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.wazuh_client import WazuhActions  # ← was missing; added
+from app.core.wazuh_client import WazuhActions
 from app.models.db_models import AtlasUser, Incident, MitigationAuditLog
 from app.services.auth_service import get_current_user
 from app.models.schemas import (
-    ApiBlockRouteRequest, DbKillQueryRequest, GenerateReportRequest,
-    GenerateReportResponse, LiftQuarantineRequest, LiftQuarantineResponse,
-    NetworkBlockRequest, QuarantineRequest, QuarantineResponse,
-    RemediateRequest, RemediateResponse,
+    ApiBlockRouteRequest,
+    NetworkBlockRequest,
+    QuarantineRequest,
+    QuarantineResponse,
+    RemediateRequest,
+    RemediateResponse,
 )
-from app.services.query import (
-    generate_report,
-    lift_quarantine,
-    update_incident_status,
-)
+from app.services.query import update_incident_status
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ATLAS Mitigation Actions (Write)"])
@@ -54,7 +57,10 @@ async def _audit(
     details: dict,
     outcome: str = "success",
 ) -> None:
-    """Write a single MitigationAuditLog row.  Fire-and-forget — never raises."""
+    """
+    Write a single MitigationAuditLog row. Fire-and-forget — never raises.
+    Errors are logged but do not abort the parent action.
+    """
     try:
         db.add(MitigationAuditLog(
             env=current_user.env,
@@ -68,10 +74,12 @@ async def _audit(
         ))
         await db.commit()
     except Exception as exc:
-        logger.error(f"[AUDIT] Failed to write audit log for {action_type}: {exc}", exc_info=True)
+        logger.error(
+            "[AUDIT] Failed to write audit log for %s: %s", action_type, exc, exc_info=True
+        )
 
 
-# ── Block API Route ───────────────────────────────────────────────────────────
+# ── Block API Route ────────────────────────────────────────────────────────────
 
 @router.post("/api-monitoring/block-route")
 async def block_api_route(
@@ -79,9 +87,13 @@ async def block_api_route(
     db: AsyncSession = Depends(get_db),
     current_user: AtlasUser = Depends(get_current_user),
 ):
+    """
+    Audit-logs a request to hard-block an API route. Live enforcement
+    is handled by the upstream gateway — ATLAS records the analyst intent.
+    """
     logger.info(
-        f"[API BLOCK] Hard block requested by {current_user.email} "
-        f"for app={payload.app} path={payload.path}"
+        "[API BLOCK] Requested by %s — app=%s path=%s",
+        current_user.email, payload.app, payload.path,
     )
     await _audit(
         db, current_user,
@@ -89,10 +101,10 @@ async def block_api_route(
         target_identifier=f"{payload.app}:{payload.path}",
         details={"app": payload.app, "path": payload.path},
     )
-    return {"success": True, "message": f"Hard block applied for route {payload.app} {payload.path}."}
+    return {"success": True, "message": f"Hard block applied for {payload.app} {payload.path}."}
 
 
-# ── Block Network Source ──────────────────────────────────────────────────────
+# ── Block Network Source ───────────────────────────────────────────────────────
 
 @router.post("/network-traffic/block")
 async def block_network_source(
@@ -100,8 +112,12 @@ async def block_network_source(
     db: AsyncSession = Depends(get_db),
     current_user: AtlasUser = Depends(get_current_user),
 ):
+    """
+    Audit-logs a request to block a source IP. Live enforcement is handled
+    by the upstream firewall / Zeek policy — ATLAS records the analyst intent.
+    """
     logger.info(
-        f"[NETWORK BLOCK] Requested by {current_user.email} for IP={payload.sourceIp}"
+        "[NETWORK BLOCK] Requested by %s — IP=%s", current_user.email, payload.sourceIp
     )
     await _audit(
         db, current_user,
@@ -112,7 +128,7 @@ async def block_network_source(
     return {"success": True, "message": f"Hard block applied for source {payload.sourceIp}."}
 
 
-# ── Quarantine Device ─────────────────────────────────────────────────────────
+# ── Quarantine Device ──────────────────────────────────────────────────────────
 
 @router.post("/endpoint-security/quarantine", response_model=QuarantineResponse)
 async def quarantine_device(
@@ -120,13 +136,19 @@ async def quarantine_device(
     db: AsyncSession = Depends(get_db),
     current_user: AtlasUser = Depends(get_current_user),
 ):
-    # WazuhActions() reads WAZUH_API_URL / WAZUH_USERNAME / WAZUH_PASSWORD
-    # from Settings — no host argument required or accepted.
-    wazuh = WazuhActions()
+    """
+    Sends a Wazuh active-response command (host-deny600) to the target agent,
+    isolating it from the network. The command is sent regardless of audit
+    outcome — isolation takes priority over bookkeeping.
+
+    WazuhActions() reads WAZUH_API_URL / WAZUH_USERNAME / WAZUH_PASSWORD
+    from Settings (.env) — no credentials are hardcoded here.
+    """
+    wazuh   = WazuhActions()
     success = wazuh.run_command(payload.workstationId, "host-deny600")
 
     if not success:
-        logger.error(f"[QUARANTINE] Wazuh failed to isolate agent {payload.workstationId}")
+        logger.error("[QUARANTINE] Wazuh failed to isolate agent %s", payload.workstationId)
 
     await _audit(
         db, current_user,
@@ -141,66 +163,20 @@ async def quarantine_device(
 
     return QuarantineResponse(
         success=success,
-        message=f"Isolation command {'sent' if success else 'failed'} for {payload.workstationId}.",
+        message=(
+            f"Isolation command {'sent' if success else 'failed'} "
+            f"for {payload.workstationId}."
+        ),
     )
 
 
-# ── Lift Quarantine ───────────────────────────────────────────────────────────
+# ── Remediate Incident ─────────────────────────────────────────────────────────
 
-@router.post("/settings/apps/{app_id}/quarantine/lift", response_model=LiftQuarantineResponse)
-async def lift_quarantine(
-    app_id: str,
-    body: LiftQuarantineRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: AtlasUser = Depends(get_current_user),
-):
-    if body.appId != app_id:
-        raise HTTPException(
-            status_code=400,
-            detail="appId in body must match app_id path parameter",
-        )
-    logger.warning(
-        f"[QUARANTINE LIFT] Requested by {current_user.email} "
-        f"env={current_user.env} app_id={app_id} ws={body.workstationId}"
-    )
-    result = await lift_quarantine(
-        current_user.env, app_id, body.workstationId, db
-    )
-    await _audit(
-        db, current_user,
-        action_type="lift_quarantine",
-        target_identifier=body.workstationId,
-        details={"appId": app_id, "workstationId": body.workstationId},
-    )
-    return result
-
-
-# ── Kill DB Query ─────────────────────────────────────────────────────────────
-
-@router.post("/db-monitoring/kill-query")
-async def kill_db_query(
-    payload: DbKillQueryRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: AtlasUser = Depends(get_current_user),
-):
-    logger.info(
-        f"[DB KILL] Requested by {current_user.email} for activityId={payload.activityId}"
-    )
-    await _audit(
-        db, current_user,
-        action_type="kill_db_query",
-        target_identifier=str(payload.activityId),
-        details={"activityId": payload.activityId, "app": payload.app, "user": payload.user},
-    )
-    return {"success": True, "message": f"Kill-query command sent for activity {payload.activityId}."}
-
-
-# ── Remediate Incident ────────────────────────────────────────────────────────
-
-_STATUS_MAP = {
-    "Dismiss":           "Closed",
-    "Block IP":          "Contained",
-    "Isolate Endpoint":  "Contained",
+# Maps analyst action labels to the new Incident.status value.
+_STATUS_MAP: dict[str, str] = {
+    "Dismiss":          "Closed",
+    "Block IP":         "Contained",
+    "Isolate Endpoint": "Contained",
 }
 
 
@@ -210,15 +186,23 @@ async def remediate_incident(
     db: AsyncSession = Depends(get_db),
     current_user: AtlasUser = Depends(get_current_user),
 ):
+    """
+    Executes a named playbook action against an open incident.
+
+    Status transitions (via _STATUS_MAP):
+      "Dismiss"          → Closed    (stamps resolved_at for MTTR)
+      "Block IP"         → Contained
+      "Isolate Endpoint" → Contained (also sends Wazuh host-deny command)
+
+    Actions not in _STATUS_MAP (e.g. "View AI Timeline", "Assign to Me") are
+    audit-logged but do not change Incident.status — they are UI-only intents.
+    """
     if not payload.incidentId or not payload.action:
-        raise HTTPException(
-            status_code=400,
-            detail="incidentId and action are required.",
-        )
+        raise HTTPException(status_code=400, detail="incidentId and action are required.")
 
     logger.info(
-        f"[REMEDIATE] Action '{payload.action}' requested by "
-        f"{current_user.email} for {payload.incidentId}"
+        "[REMEDIATE] '%s' requested by %s for %s",
+        payload.action, current_user.email, payload.incidentId,
     )
 
     new_status = _STATUS_MAP.get(payload.action)
@@ -226,22 +210,29 @@ async def remediate_incident(
     if new_status:
         await update_incident_status(payload.incidentId, new_status, db)
 
+        # ── Isolate Endpoint: send Wazuh active-response command ──────────────
         if payload.action == "Isolate Endpoint":
             result = await db.execute(
                 select(Incident).where(Incident.incident_id == payload.incidentId)
             )
             incident = result.scalar_one_or_none()
 
-            if incident and incident.target_identifier:
-                # WazuhActions() reads host/credentials from Settings — no
-                # hardcoded IP or password here.
-                wazuh = WazuhActions()
-                success = wazuh.run_command(incident.target_identifier, "host-deny")
+            # `source_ip` is the attacker's source — we isolate the target endpoint.
+            # The Wazuh agent identifier is stored in target_app when it refers
+            # to a specific workstation; fall back to source_ip if not set.
+            agent_id = (
+                incident.target_app or incident.source_ip
+                if incident else None
+            )
+            if agent_id:
+                wazuh   = WazuhActions()
+                success = wazuh.run_command(agent_id, "host-deny")
                 logger.info(
-                    f"[REMEDIATE] Isolation command for agent "
-                    f"{incident.target_identifier}: {'sent' if success else 'failed'}"
+                    "[REMEDIATE] Isolation command for agent %s: %s",
+                    agent_id, "sent" if success else "failed",
                 )
 
+        # ── Stamp resolved_at for MTTR calculation ────────────────────────────
         if new_status == "Closed":
             result = await db.execute(
                 select(Incident).where(Incident.incident_id == payload.incidentId)
@@ -258,40 +249,9 @@ async def remediate_incident(
         target_identifier=payload.incidentId,
         details={
             "incidentId": payload.incidentId,
-            "action": payload.action,
+            "action":     payload.action,
             "new_status": new_status,
         },
     )
 
     return RemediateResponse(success=True, message=f"Action '{payload.action}' initiated.")
-
-
-# ── Generate Report ───────────────────────────────────────────────────────────
-
-@router.post("/reports/generate", response_model=GenerateReportResponse)
-async def generate_report(
-    body: GenerateReportRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: AtlasUser = Depends(get_current_user),
-):
-    if not body.dataSource or not body.template or not body.exportFormat:
-        raise HTTPException(
-            status_code=400,
-            detail="dataSource, template, and exportFormat are required.",
-        )
-    logger.info(
-        f"[REPORTS] Generate requested by {current_user.email} for {body.dataSource}"
-    )
-    result = await generate_report(current_user.env, body, db)
-    await _audit(
-        db, current_user,
-        action_type="generate_report",
-        target_identifier=body.dataSource,
-        details={
-            "dataSource": body.dataSource,
-            "template": body.template,
-            "exportFormat": body.exportFormat,
-            "dateRange": body.dateRange,
-        },
-    )
-    return result

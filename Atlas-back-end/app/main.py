@@ -2,11 +2,20 @@
 main.py — ATLAS FastAPI Application
 
 Startup sequence (lifespan):
-  1. seed_default_admin()         — Safely attempts to seed admin (skips if tables missing/exist)
-  2. seed_applications_config()   — Safely attempts to seed Apps/Microservices
-  3. start_wazuh_sync()           — Background Wazuh poll task (runs every 1 minute)
+  1. seed_default_admin()        — Safely seeds admin user (skips if tables
+                                   missing or user already exists).
+  2. _start_wazuh_sync()         — Background task: polls Wazuh Indexer every
+                                   60 seconds for new endpoint alerts.
+  3. run_anomaly_engine()        — Background task: statistical spike detector
+                                   running every 60 seconds against EndpointLog.
 
-Note: Table creation is now handled strictly by Alembic migrations externally.
+Table creation is handled strictly by init_db.py before Uvicorn starts.
+Neither task blocks startup — both are fire-and-forget asyncio tasks.
+
+Removed from previous version:
+  - _seed_applications_config()  — Application/Microservice/AppConfig seed
+                                   (those models are retired)
+  - settings_router              — routes_settings.py retired (AppConfig gone)
 """
 
 import asyncio
@@ -16,18 +25,17 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text, select
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal, close_db
 from app.services.auth_service import seed_default_admin
 from app.services.wazuh_service import WazuhCollector
-from app.models.db_models import Application, AppConfig, Microservice
+from app.services.anomaly_detection import run_anomaly_engine
 
 from app.api.routes_auth import router as auth_router
 from app.api.routes_dashboard import router as dashboard_router
-from app.api.routes_settings import router as settings_router
 from app.api.routes_actions import router as actions_router
 
 logging.basicConfig(
@@ -38,79 +46,28 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
-async def _seed_applications_config() -> None:
-    """
-    Seeds Applications, Microservices, and AppConfigs for every env.
-    Idempotent — safely handles race conditions in multi-worker environments.
-    """
-    _APPS = [
-        ("all",      "All Applications"),
-        ("naukri",   "Naukri"),
-        ("genai",    "GenAI"),
-        ("flipkart", "Flipkart"),
-    ]
 
-    _MICROSERVICES = [
-        ("api",           "API-Gateway",          "Healthy", "40%", "75%", "auth,payment,notifications"),
-        ("auth",          "Auth-Service",         "Healthy", "20%", "25%", "api"),
-        ("payment",       "Payment-Service",      "Healthy", "50%", "50%", "api"),
-        ("notifications", "Notification-Service", "Healthy", "70%", "25%", "api"),
-    ]
-
-    async with AsyncSessionLocal() as db:
-        try:
-            for env in ("cloud", "local"):
-                for app_id, name in _APPS:
-                    exists = (await db.execute(
-                        select(Application).where(
-                            Application.env == env,
-                            Application.app_id == app_id,
-                        )
-                    )).scalar_one_or_none()
-                    if not exists:
-                        db.add(Application(env=env, app_id=app_id, name=name))
-
-                has_ms = (await db.execute(
-                    select(Microservice).where(Microservice.env == env).limit(1)
-                )).scalar_one_or_none()
-                
-                if not has_ms:
-                    for sid, name, status, top, left, conns in _MICROSERVICES:
-                        db.add(Microservice(
-                            env=env, service_id=sid, name=name,
-                            status=status, position_top=top,
-                            position_left=left, connections_csv=conns,
-                        ))
-
-                for app_id, _ in _APPS:
-                    if app_id == "all":
-                        continue
-                    exists = (await db.execute(
-                        select(AppConfig).where(
-                            AppConfig.env == env,
-                            AppConfig.app_id == app_id,
-                        )
-                    )).scalar_one_or_none()
-                    if not exists:
-                        db.add(AppConfig(env=env, app_id=app_id))
-
-            await db.commit()
-
-        except (IntegrityError, ProgrammingError):
-            await db.rollback()
-            logger.info("Application config seed skipped: Data already exists or tables not ready.")
-        except Exception as e:
-            await db.rollback()
-            logger.error(f"Unexpected error during application config seed: {e}")
+# ─────────────────────────────────────────────────────────────────────────────
+# Background Tasks
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def _start_wazuh_sync() -> None:
     """
-    Background coroutine that polls Wazuh every minute for new alerts.
+    Background coroutine that polls Wazuh Indexer every 60 seconds.
+
+    On each cycle it calls WazuhCollector.sync_alerts() which:
+      1. Fetches the 50 most recent alerts above rule.level >= 3.
+      2. Deduplicates by timestamp (idempotent — safe to re-run).
+      3. Writes new EndpointLog rows to PostgreSQL.
+
+    These rows are then picked up by:
+      - endpoint_service.get_endpoint_security()  (dashboard read path)
+      - anomaly_detection.run_anomaly_engine()     (spike detector)
     """
     collector = WazuhCollector()
     while True:
         try:
-            logger.info("[WazuhSync] Polling Wazuh for new alerts ...")
+            logger.info("[WazuhSync] Polling Wazuh Indexer for new alerts ...")
             async with AsyncSessionLocal() as db:
                 await collector.sync_alerts(db)
             logger.info("[WazuhSync] Sync complete.")
@@ -122,37 +79,59 @@ async def _start_wazuh_sync() -> None:
 
         await asyncio.sleep(60)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lifespan
+# ─────────────────────────────────────────────────────────────────────────────
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info(f"Starting {settings.app_name} (env: {settings.app_env}) ...")
-    
-    # Database tables are now created by init_db.py before Uvicorn starts
-    # This eliminates race conditions and UndefinedTableError issues
-    
+    logger.info("Starting %s (env: %s) ...", settings.app_name, settings.app_env)
+
+    # Database tables are created by init_db.py before Uvicorn starts.
+    # Seeding here is idempotent — safe to call on every restart.
     try:
         await seed_default_admin()
-        await _seed_applications_config()
     except (IntegrityError, ProgrammingError):
-        logger.warning("Database not ready. Skipping initial data seeding.")
+        logger.warning("Database not ready. Skipping admin seed.")
 
-    wazuh_task = asyncio.create_task(_start_wazuh_sync())
-    logger.info(f"{settings.app_name} startup complete. Wazuh sync active.")
+    # Launch background tasks concurrently — both run indefinitely until
+    # the application shuts down.
+    wazuh_task   = asyncio.create_task(_start_wazuh_sync(),    name="wazuh_sync")
+    anomaly_task = asyncio.create_task(run_anomaly_engine(),   name="anomaly_engine")
+
+    logger.info(
+        "%s startup complete. Active background tasks: %s",
+        settings.app_name,
+        [t.get_name() for t in (wazuh_task, anomaly_task)],
+    )
 
     yield
 
-    logger.info("Shutting down ATLAS ...")
-    wazuh_task.cancel()
-    try:
-        await wazuh_task
-    except asyncio.CancelledError:
-        pass
+    # ── Graceful shutdown ─────────────────────────────────────────────────────
+    logger.info("Shutting down ATLAS — cancelling background tasks ...")
+
+    for task in (wazuh_task, anomaly_task):
+        task.cancel()
+
+    # Wait for both tasks to acknowledge cancellation.
+    await asyncio.gather(wazuh_task, anomaly_task, return_exceptions=True)
+
     await close_db()
     logger.info("Database connection pool closed. Shutdown complete.")
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FastAPI App
+# ─────────────────────────────────────────────────────────────────────────────
+
 app = FastAPI(
-    title="ATLAS — Advanced Traffic Layer Anomaly System",
-    description="Enterprise SOC Dashboard backend powered by FastAPI + PostgreSQL.",
-    version="2.0.0",
+    title="ATLAS — Anomaly Command Center",
+    description=(
+        "SOC backend for Wazuh (Endpoint) and Zeek (Network) anomaly detection. "
+        "PostgreSQL-native, no pandas hot-path, pure async."
+    ),
+    version="3.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -166,14 +145,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Settings router intentionally omitted — AppConfig model retired.
+# Quarantine lift remains in routes_actions (/settings/apps/{id}/quarantine/lift).
 app.include_router(auth_router)
 app.include_router(dashboard_router)
-app.include_router(settings_router)
 app.include_router(actions_router)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Global Exception Handler
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc: Exception):
-    logger.error(f"Unhandled exception on {request.url}: {exc}", exc_info=True)
+    logger.error("Unhandled exception on %s: %s", request.url, exc, exc_info=True)
     return JSONResponse(
         status_code=500,
         content={
@@ -182,14 +167,20 @@ async def global_exception_handler(request, exc: Exception):
         },
     )
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Health Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
 @app.get("/", tags=["Health"])
 async def root():
     return {
-        "service": settings.app_name,
-        "version": "2.0.0",
-        "stack": "FastAPI + PostgreSQL",
+        "service":     settings.app_name,
+        "version":     "3.0.0",
+        "stack":       "FastAPI + PostgreSQL",
         "environment": settings.app_env,
     }
+
 
 @app.get("/health", tags=["Health"])
 async def health():
@@ -202,7 +193,7 @@ async def health():
         db_status = f"error: {exc}"
 
     return {
-        "status": "healthy" if db_status == "connected" else "degraded",
+        "status":   "healthy" if db_status == "connected" else "degraded",
         "database": db_status,
-        "stack": "FastAPI",
+        "stack":    "FastAPI",
     }
