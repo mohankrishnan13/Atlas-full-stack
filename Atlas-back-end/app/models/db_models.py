@@ -1,476 +1,159 @@
 """
-models/db_models.py — SQLAlchemy ORM Models (PostgreSQL + JSONB)
+models/db_models.py — SQLAlchemy ORM Models (PostgreSQL)
 
-Architecture decisions:
-  - Every table has a `raw_payload` JSONB column to store the original log
-    entry verbatim. This is the "append-only raw log" pattern — structured
-    columns are indexes into this payload, not copies of it.
-  - JSONB (not JSON) is used because PostgreSQL can index JSONB with GIN,
-    enabling fast `@>` containment queries on arbitrary log keys.
-  - `env` column on every table disambiguates Cloud vs Local environments,
-    which is a first-class concept in the ATLAS frontend.
-  - Timestamps are stored as UTC strings (ISO-8601) for direct JSON serialisation
-    without tz-conversion overhead in the API layer.
+Architecture after Anomaly Command Center pivot:
 
-Naming convention:
-  - Table names: plural snake_case (network_logs, api_logs, etc.)
-  - Column names: snake_case matching the Python attribute name
+  A) Stateful / mutable:
+       AtlasUser, UserSession, Incident, MitigationAuditLog,
+       QuarantinedEndpoint, S3IngestCursor
+
+  B) Telemetry write-store (Wazuh + Zeek only):
+       EndpointLog   — written by wazuh_service.WazuhCollector.sync_alerts()
+       NetworkLog    — written by log_ingestion (Zeek routed through Wazuh)
+       Alert         — aggregated bell-notification events
+
+  C) Anomaly Engine output:
+       TrafficAnomaly — written by anomaly_detection.run_anomaly_engine()
+                        Consumed by /overview endpoint and future AI phase.
+
+REMOVED from previous version:
+  - ApiLog           (API Monitoring domain — retired)
+  - DbActivityLog    (DB Monitoring domain — retired)
+  - Application      (driven app registry — retired, header uses EndpointLog)
+  - Microservice     (topology diagram — retired)
+  - AppConfig        (per-app config tuning — retired)
+  - QuarantinedEndpoint (moved to MitigationAuditLog audit trail)
+  - ScheduledReport  (reports domain — retired)
+  - ReportDownload   (reports domain — retired)
 """
 
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    ForeignKey,
-    BigInteger,
-    Boolean,
-    Float,
-    Index,
-    Integer,
-    String,
-    Text,
+    BigInteger, Boolean, DateTime, Float, ForeignKey,
+    Index, Integer, String, Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
+
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Config / Reference Tables
-# ─────────────────────────────────────────────────────────────────────────────
-
-class Application(Base):
-    __tablename__ = "applications"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    app_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(256), nullable=False)
-
-    __table_args__ = (
-        Index("uq_applications_env_app_id", "env", "app_id", unique=True),
-    )
-
-class Microservice(Base):
-    __tablename__ = "microservices"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    service_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(256), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="Healthy")
-    position_top: Mapped[str] = mapped_column(String(16), nullable=False, default="50%")
-    position_left: Mapped[str] = mapped_column(String(16), nullable=False, default="50%")
-    connections_csv: Mapped[str] = mapped_column(Text, nullable=False, default="")
-
-    __table_args__ = (
-        Index("uq_microservices_env_service_id", "env", "service_id", unique=True),
-    )
-
-
-class AppConfig(Base):
-    __tablename__ = "app_configs"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    app_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-
-    # Alert tuning
-    warning_anomaly_score: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
-    critical_anomaly_score: Mapped[int] = mapped_column(Integer, nullable=False, default=80)
-
-    # Progressive containment
-    soft_rate_limit_calls_per_min: Mapped[int] = mapped_column(Integer, nullable=False, default=800)
-    hard_block_threshold_calls_per_min: Mapped[int] = mapped_column(Integer, nullable=False, default=3000)
-    auto_quarantine_laptops: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-
-    # ML baselines
-    training_window_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
-    model_sensitivity_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=58)
-    auto_update_baselines_weekly: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    baseline_model_name: Mapped[str] = mapped_column(String(256), nullable=False, default="")
-    baseline_last_updated_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-
-    updated_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-
-    __table_args__ = (
-        Index("uq_app_configs_env_app", "env", "app_id", unique=True),
-    )
-
-
-class QuarantinedEndpoint(Base):
-    __tablename__ = "quarantined_endpoints"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    app_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    workstation_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    user_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
-    quarantined_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-    lifted_at: Mapped[str] = mapped_column(String(64), nullable=True)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="Active", index=True)
-    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-
-    __table_args__ = (
-        Index("ix_quarantined_endpoints_env_app", "env", "app_id"),
-        Index("ix_quarantined_endpoints_env_status", "env", "status"),
-    )
-
-
-class ScheduledReport(Base):
-    __tablename__ = "scheduled_reports"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    title: Mapped[str] = mapped_column(String(256), nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    target_app_scope: Mapped[str] = mapped_column(String(256), nullable=False, default="All Sources")
-    schedule: Mapped[str] = mapped_column(String(128), nullable=False, default="Every Monday at 8:00 AM")
-    template: Mapped[str] = mapped_column(String(256), nullable=False, default="General Security Summary")
-    export_format: Mapped[str] = mapped_column(String(32), nullable=False, default="PDF")
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-
-    __table_args__ = (
-        Index("ix_scheduled_reports_env_enabled", "env", "enabled"),
-    )
-
-
-class ReportDownload(Base):
-    __tablename__ = "report_downloads"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    file_name: Mapped[str] = mapped_column(String(512), nullable=False)
-    target_app_scope: Mapped[str] = mapped_column(String(256), nullable=False, default="All Sources")
-    generated_at_label: Mapped[str] = mapped_column(String(64), nullable=False, default="Today")
-    size_label: Mapped[str] = mapped_column(String(64), nullable=False, default="0 KB")
-    download_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
-    created_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-
-    __table_args__ = (
-        Index("ix_report_downloads_env_created", "env", "created_at"),
-    )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Atlas Users (Unified Authentication & RBAC)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class AtlasUser(Base):
-    """
-    Unified User Table. One row = one ATLAS platform user.
-    Handles login, RBAC, and Profile settings.
-    """
-    __tablename__ = "atlas_users"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True, default="cloud")
-    email: Mapped[str] = mapped_column(String(256), nullable=False, unique=True, index=True)
-    hashed_password: Mapped[str] = mapped_column(String(256), nullable=False)
-    name: Mapped[str] = mapped_column(String(128), nullable=False)
-    role: Mapped[str] = mapped_column(String(32), nullable=False, default="Analyst")
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    phone: Mapped[str] = mapped_column(String(64), nullable=True)
-    avatar: Mapped[str] = mapped_column(String(512), nullable=True, default="")
-    totp_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    totp_secret: Mapped[str] = mapped_column(String(128), nullable=True)
-    invite_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-
-    sessions: Mapped[list["UserSession"]] = relationship(
-        "UserSession", back_populates="user", cascade="all, delete-orphan"
-    )
-
-    __table_args__ = (
-        Index("ix_atlas_users_role", "role"),
-        Index("uq_atlas_users_env_email", "env", "email", unique=True),
-    )
-
-class UserSession(Base):
-    """
-    One row = one login attempt (success or failure).
-
-    Used to populate the "Recent Account Activity" table on the profile page.
-    Stored for the last N sessions per user (app layer enforces the cap).
-    """
-    __tablename__ = "user_sessions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("atlas_users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    ip_address: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
-    location: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown")
-    device_info: Mapped[str] = mapped_column(String(256), nullable=False, default="Unknown Device")
-    status: Mapped[str] = mapped_column(String(128), nullable=False, default="Success")
-    logged_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-
-    user: Mapped["AtlasUser"] = relationship("AtlasUser", back_populates="sessions")
-
-    __table_args__ = (
-        Index("ix_user_sessions_user_logged", "user_id", "logged_at"),
-    )
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Network Traffic Logs
+# Telemetry Write-Store  (Category B)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class NetworkLog(Base):
     """
-    One row = one observed network anomaly or traffic event.
-
-    Indexed on (env, timestamp) for fast time-range queries and
-    on (env, source_ip) for per-IP investigation queries.
+    Zeek-sourced network anomaly / intrusion detection events.
+    Populated by log_ingestion and wazuh_service (Zeek routed through Wazuh).
     """
     __tablename__ = "network_logs"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)       # "cloud" | "local"
-    # Loghub common columns
-    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
-    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-    level: Mapped[str] = mapped_column(String(32), nullable=True)
-    component: Mapped[str] = mapped_column(String(128), nullable=True)
-    content: Mapped[str] = mapped_column(Text, nullable=True)
-    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
-    event_template: Mapped[str] = mapped_column(Text, nullable=True)
-    # Security context columns
-    target_app: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown")
-    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="Medium", index=True)
-    source_ip: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    dest_ip: Mapped[str] = mapped_column(String(64), nullable=False)
-    app: Mapped[str] = mapped_column(String(128), nullable=False)
-    port: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    anomaly_type: Mapped[str] = mapped_column(String(256), nullable=False)
-    bandwidth_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    active_connections: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    dropped_packets: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+
+    env: Mapped[str]          = mapped_column(String(16),  nullable=False, index=True)
+    severity: Mapped[str]     = mapped_column(String(32),  nullable=False, default="Info", index=True)
+
+    source_ip: Mapped[str]    = mapped_column(String(64),  nullable=False, default="")
+    dest_ip: Mapped[str]      = mapped_column(String(64),  nullable=False, default="")
+    app: Mapped[str]          = mapped_column(String(256), nullable=False, default="Unknown")
+    target_app: Mapped[str]   = mapped_column(String(256), nullable=False, default="Unknown")
+    port: Mapped[int]         = mapped_column(Integer,     nullable=False, default=0)
+    anomaly_type: Mapped[str] = mapped_column(String(256), nullable=False, default="Unknown")
+
+    bandwidth_pct: Mapped[int]      = mapped_column(Integer, nullable=False, default=0)
+    active_connections: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    dropped_packets: Mapped[int]    = mapped_column(Integer, nullable=False, default=0)
+
+    # Loghub structured CSV fields (optional)
+    line_id: Mapped[int]          = mapped_column(BigInteger, nullable=True)
+    level: Mapped[str]            = mapped_column(String(32),  nullable=True)
+    component: Mapped[str]        = mapped_column(String(256), nullable=True)
+    content: Mapped[str]          = mapped_column(Text,        nullable=True)
+    event_id: Mapped[str]         = mapped_column(String(64),  nullable=True, index=True)
+    event_template: Mapped[str]   = mapped_column(Text,        nullable=True)
+
+    timestamp: Mapped[str]    = mapped_column(String(64),  nullable=False, default="")
     raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     __table_args__ = (
-        Index("ix_network_logs_env_ts", "env", "timestamp"),
-        Index("ix_network_logs_jsonb", "raw_payload", postgresql_using="gin"),
+        Index("ix_network_logs_env_severity", "env", "severity"),
+        Index("ix_network_logs_source_ip",    "source_ip"),
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# API Monitoring Logs
-# ─────────────────────────────────────────────────────────────────────────────
-
-class ApiLog(Base):
-    """
-    One row = one API endpoint telemetry snapshot (or abusive call event).
-
-    `action` mirrors the frontend's action column: 'OK' | 'Rate-Limited' | 'Blocked'
-    `trend`  is a signed integer representing % change in call volume (7d).
-    """
-    __tablename__ = "api_logs"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    # Loghub common columns
-    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
-    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-    level: Mapped[str] = mapped_column(String(32), nullable=True)
-    component: Mapped[str] = mapped_column(String(128), nullable=True)
-    content: Mapped[str] = mapped_column(Text, nullable=True)
-    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
-    event_template: Mapped[str] = mapped_column(Text, nullable=True)
-    # Security context columns
-    target_app: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown", index=True)
-    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="Medium", index=True)
-    source_ip: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
-    app: Mapped[str] = mapped_column(String(128), nullable=False)
-    path: Mapped[str] = mapped_column(String(512), nullable=False)
-    method: Mapped[str] = mapped_column(String(16), nullable=False, default="GET")
-    cost_per_call: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    trend_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    action: Mapped[str] = mapped_column(String(32), nullable=False, default="OK")
-    calls_today: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    blocked_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    avg_latency_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    estimated_cost: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    hour_label: Mapped[str] = mapped_column(String(16), nullable=False)  # e.g. "9am"
-    actual_calls: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    predicted_calls: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-
-    __table_args__ = (
-        Index("ix_api_logs_env_ts", "env", "timestamp"),
-        Index("ix_api_logs_jsonb", "raw_payload", postgresql_using="gin"),
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Endpoint Security (Velociraptor / Wazuh-compatible events)
-# ─────────────────────────────────────────────────────────────────────────────
 
 class EndpointLog(Base):
     """
-    One row = one endpoint security event (malware alert, policy violation, etc.).
+    Wazuh endpoint security events — workstation alerts, malware, policy violations.
+    Populated by wazuh_service.WazuhCollector.sync_alerts() (the background poller)
+    and log_ingestion for bulk historical imports.
 
-    `workstation_id` is the Velociraptor client ID or hostname.
-    `os_name` feeds the OS Distribution pie chart.
-    `alert_category` feeds the Alert Types pie chart.
+    This is the primary data source for:
+      - endpoint_service.get_endpoint_security()
+      - anomaly_detection.run_anomaly_engine() (spike detection)
     """
     __tablename__ = "endpoint_logs"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    # Loghub common columns
-    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
-    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-    level: Mapped[str] = mapped_column(String(32), nullable=True)
-    component: Mapped[str] = mapped_column(String(128), nullable=True)
-    content: Mapped[str] = mapped_column(Text, nullable=True)
-    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
-    event_template: Mapped[str] = mapped_column(Text, nullable=True)
-    # Security context columns
-    target_app: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown", index=True)
-    workstation_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    employee: Mapped[str] = mapped_column(String(256), nullable=False)
-    avatar: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    alert_message: Mapped[str] = mapped_column(Text, nullable=False)
-    alert_category: Mapped[str] = mapped_column(String(128), nullable=False)  # Malware | Policy Violation | etc.
-    severity: Mapped[str] = mapped_column(String(32), nullable=False)          # Critical | High | Medium | Low
-    os_name: Mapped[str] = mapped_column(String(128), nullable=False)          # Windows 11 | Ubuntu 22.04 | etc.
+
+    env: Mapped[str]      = mapped_column(String(16),  nullable=False, index=True)
+    severity: Mapped[str] = mapped_column(String(32),  nullable=False, default="Low", index=True)
+
+    workstation_id: Mapped[str] = mapped_column(String(128), nullable=False, default="UNKNOWN")
+    employee: Mapped[str]       = mapped_column(String(128), nullable=False, default="Unknown")
+    avatar: Mapped[str]         = mapped_column(String(512), nullable=False, default="")
+    os_name: Mapped[str]        = mapped_column(String(128), nullable=False, default="Unknown")
+    target_app: Mapped[str]     = mapped_column(String(256), nullable=False, default="Unknown")
+
+    alert_message: Mapped[str]  = mapped_column(Text, nullable=False, default="")
+    alert_category: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown")
+
     is_offline: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_malware: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+
+    # Loghub structured CSV fields (optional)
+    line_id: Mapped[int]        = mapped_column(BigInteger, nullable=True)
+    level: Mapped[str]          = mapped_column(String(32),  nullable=True)
+    component: Mapped[str]      = mapped_column(String(256), nullable=True)
+    content: Mapped[str]        = mapped_column(Text,        nullable=True)
+    event_id: Mapped[str]       = mapped_column(String(64),  nullable=True, index=True)
+    event_template: Mapped[str] = mapped_column(Text,        nullable=True)
+
+    # ISO-8601 string — used for lexicographic time-window comparisons
+    # in run_anomaly_engine() and endpoint_service.
+    timestamp: Mapped[str]    = mapped_column(String(64),  nullable=False, default="")
     raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     __table_args__ = (
-        Index("ix_endpoint_logs_env_ts", "env", "timestamp"),
-        Index("ix_endpoint_logs_env_severity", "env", "severity"),
-        Index("ix_endpoint_logs_jsonb", "raw_payload", postgresql_using="gin"),
+        Index("ix_endpoint_logs_env_severity",  "env", "severity"),
+        Index("ix_endpoint_logs_env_malware",   "env", "is_malware"),
+        Index("ix_endpoint_logs_workstation",   "workstation_id"),
+        # Covering index for time-window queries in the anomaly engine.
+        Index("ix_endpoint_logs_env_timestamp", "env", "timestamp"),
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Database Activity Monitoring
-# ─────────────────────────────────────────────────────────────────────────────
-
-class DbActivityLog(Base):
-    """
-    One row = one database operation event or snapshot.
-
-    `is_suspicious` triggers inclusion in the Suspicious Activity table.
-    `hour_label` maps to the operationsChart time-series labels.
-    """
-    __tablename__ = "db_activity_logs"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    # Loghub common columns
-    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
-    level: Mapped[str] = mapped_column(String(32), nullable=True)
-    component: Mapped[str] = mapped_column(String(128), nullable=True)
-    content: Mapped[str] = mapped_column(Text, nullable=True)
-    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
-    event_template: Mapped[str] = mapped_column(Text, nullable=True)
-    # Security context columns
-    target_app: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown", index=True)
-    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="Medium", index=True)
-    app: Mapped[str] = mapped_column(String(128), nullable=False)
-    db_user: Mapped[str] = mapped_column(String(128), nullable=False)
-    query_type: Mapped[str] = mapped_column(String(32), nullable=False)   # SELECT | INSERT | UPDATE | DELETE
-    target_table: Mapped[str] = mapped_column(String(256), nullable=False)
-    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    is_suspicious: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
-    active_connections: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    avg_latency_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    data_export_volume_tb: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    hour_label: Mapped[str] = mapped_column(String(16), nullable=False)
-    select_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    insert_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    update_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    delete_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-
-    __table_args__ = (
-        Index("ix_db_logs_env_ts", "env", "timestamp"),
-        Index("ix_db_logs_env_suspicious", "env", "is_suspicious"),
-        Index("ix_db_logs_jsonb", "raw_payload", postgresql_using="gin"),
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Incidents (Case Management)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class Incident(Base):
-    """
-    One row = one security incident case.
-
-    `incident_id` is a human-readable string (e.g., "INC-2405-001")
-    that is stable across the lifecycle of the case.
-    `status` follows the frontend's: 'Active' | 'Contained' | 'Closed'
-    `severity` follows the frontend's: 'Critical' | 'High' | 'Medium' | 'Low'
-    """
-    __tablename__ = "incidents"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    incident_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
-    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    # Loghub common columns
-    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
-    level: Mapped[str] = mapped_column(String(32), nullable=True)
-    component: Mapped[str] = mapped_column(String(128), nullable=True)
-    content: Mapped[str] = mapped_column(Text, nullable=True)
-    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
-    event_template: Mapped[str] = mapped_column(Text, nullable=True)
-    event_name: Mapped[str] = mapped_column(String(512), nullable=False)
-    timestamp: Mapped[str] = mapped_column(String(64), nullable=False)
-    severity: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    source_ip: Mapped[str] = mapped_column(String(64), nullable=False)
-    dest_ip: Mapped[str] = mapped_column(String(64), nullable=False)
-    target_app: Mapped[str] = mapped_column(String(256), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="Active", index=True)
-    event_details: Mapped[str] = mapped_column(Text, nullable=False)
-    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-
-    __table_args__ = (
-        Index("ix_incidents_env_severity", "env", "severity"),
-        Index("ix_incidents_env_status", "env", "status"),
-        Index("ix_incidents_jsonb", "raw_payload", postgresql_using="gin"),
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Alert Feed (Header / Notification Bell)
-# ─────────────────────────────────────────────────────────────────────────────
 
 class Alert(Base):
     """
-    One row = one recent alert shown in the header notification dropdown.
-
-    `timestamp_label` is a human-readable relative string (e.g., "2m ago")
-    that is computed at ingestion time and stored for direct frontend use.
+    Bell-notification alerts — aggregated from endpoint and network events.
+    Populated by log_ingestion (alerts.jsonl).
     """
     __tablename__ = "alerts"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    alert_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
-    env: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    # Loghub common columns
-    line_id: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
-    timestamp: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
-    level: Mapped[str] = mapped_column(String(32), nullable=True)
-    component: Mapped[str] = mapped_column(String(128), nullable=True)
-    content: Mapped[str] = mapped_column(Text, nullable=True)
-    event_id: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
-    event_template: Mapped[str] = mapped_column(Text, nullable=True)
-    # Security context columns
-    target_app: Mapped[str] = mapped_column(String(128), nullable=False, default="Unknown", index=True)
-    source_ip: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
-    app: Mapped[str] = mapped_column(String(256), nullable=False)
-    message: Mapped[str] = mapped_column(Text, nullable=False)
-    severity: Mapped[str] = mapped_column(String(32), nullable=False)
-    timestamp_label: Mapped[str] = mapped_column(String(64), nullable=False)  # "2m ago"
-    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    alert_id: Mapped[str]        = mapped_column(String(128), nullable=False, default="", index=True)
+    env: Mapped[str]             = mapped_column(String(16),  nullable=False, index=True)
+    app: Mapped[str]             = mapped_column(String(256), nullable=False, default="Unknown")
+    message: Mapped[str]         = mapped_column(Text, nullable=False, default="")
+    severity: Mapped[str]        = mapped_column(String(32),  nullable=False, default="Low", index=True)
+    timestamp_label: Mapped[str] = mapped_column(String(128), nullable=False, default="recently")
+    raw_payload: Mapped[dict]    = mapped_column(JSONB, nullable=False, default=dict)
 
     __table_args__ = (
         Index("ix_alerts_env_severity", "env", "severity"),
@@ -478,39 +161,202 @@ class Alert(Base):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# S3 Ingest Cursor  (cold-storage backfill tracker)
+# Anomaly Engine Output  (Category C)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TrafficAnomaly(Base):
+    """
+    Statistical anomaly records written by run_anomaly_engine().
+
+    One row = one detected spike event.  Never mutated after insert —
+    use status-only updates via a separate audit if you need lifecycle tracking.
+
+    Column notes
+    ─────────────
+    anomaly_type  : Human-readable classification e.g. "Endpoint Alert Spike",
+                    "Network Volume Spike".  Use consistent names — the frontend
+                    groups and filters on this field.
+
+    severity      : Derived from the spike magnitude ratio at detection time.
+                    "Critical" (≥ 5× baseline), "High" (≥ 3×), "Medium" (< 3×
+                    but above count threshold).
+
+    details       : JSON-encoded context snapshot captured at detection:
+                    { "current_count": int, "baseline_avg": float,
+                      "spike_ratio": float, "env": str }
+                    Stored as Text to keep schema simple; parse at call-site.
+
+    ai_explanation: Reserved for Phase 3 — the AI investigator flow will
+                    populate this column via a background enrichment pass.
+                    Nullable intentionally; do not block inserts waiting for it.
+
+    timestamp     : Proper timezone-aware DateTime (not a String like the legacy
+                    telemetry tables) so the anomaly feed can use BETWEEN and
+                    ORDER BY natively without lexicographic tricks.
+    """
+    __tablename__ = "traffic_anomalies"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    env: Mapped[str]          = mapped_column(String(16),   nullable=False, index=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    anomaly_type: Mapped[str] = mapped_column(String(128),  nullable=False, index=True)
+    severity: Mapped[str]     = mapped_column(String(32),   nullable=False, default="High", index=True)
+    details: Mapped[str]      = mapped_column(Text,         nullable=False, default="")
+    ai_explanation: Mapped[str] = mapped_column(Text,       nullable=True)
+
+    __table_args__ = (
+        Index("ix_traffic_anomalies_env_ts",       "env", "timestamp"),
+        Index("ix_traffic_anomalies_env_severity", "env", "severity"),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mitigation Audit Log
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MitigationAuditLog(Base):
+    """
+    Immutable audit trail for every SOC analyst action.
+    One row = one action (block, quarantine, remediate, etc.).
+    Never deleted — archive via PostgreSQL partitioning for retention.
+    """
+    __tablename__ = "mitigation_audit_logs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    env: Mapped[str]            = mapped_column(String(16),  nullable=False, index=True)
+    analyst_email: Mapped[str]  = mapped_column(String(256), nullable=False, index=True)
+    analyst_role: Mapped[str]   = mapped_column(String(32),  nullable=False, default="Analyst")
+
+    # e.g. "block_network_source" | "quarantine_device" | "remediate_incident"
+    action_type: Mapped[str]       = mapped_column(String(64),  nullable=False, index=True)
+    target_identifier: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    outcome: Mapped[str]           = mapped_column(String(32),  nullable=False, default="success")
+    details: Mapped[dict]          = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[str]        = mapped_column(String(64),  nullable=False, default=_utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_mitigation_audit_env_action",  "env", "action_type"),
+        Index("ix_mitigation_audit_analyst",     "analyst_email", "created_at"),
+        Index("ix_mitigation_audit_jsonb",       "details", postgresql_using="gin"),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Case Management
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Incident(Base):
+    """
+    Security incident case.
+    `resolved_at` is set when status → 'Closed' — drives MTTR calculation.
+    Lifecycle: 'Active' → 'Contained' → 'Closed'
+    """
+    __tablename__ = "incidents"
+
+    id: Mapped[int]             = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    incident_id: Mapped[str]    = mapped_column(String(64),  nullable=False, unique=True, index=True)
+    env: Mapped[str]            = mapped_column(String(16),  nullable=False, index=True)
+    line_id: Mapped[int]        = mapped_column(BigInteger,  nullable=True,  index=True)
+    level: Mapped[str]          = mapped_column(String(32),  nullable=True)
+    component: Mapped[str]      = mapped_column(String(128), nullable=True)
+    content: Mapped[str]        = mapped_column(Text,        nullable=True)
+    event_id: Mapped[str]       = mapped_column(String(64),  nullable=True, index=True)
+    event_template: Mapped[str] = mapped_column(Text,        nullable=True)
+    event_name: Mapped[str]     = mapped_column(String(512), nullable=False)
+    timestamp: Mapped[str]      = mapped_column(String(64),  nullable=False)
+    severity: Mapped[str]       = mapped_column(String(32),  nullable=False, index=True)
+    source_ip: Mapped[str]      = mapped_column(String(64),  nullable=False)
+    dest_ip: Mapped[str]        = mapped_column(String(64),  nullable=False)
+    target_app: Mapped[str]     = mapped_column(String(256), nullable=False)
+    status: Mapped[str]         = mapped_column(String(32),  nullable=False, default="Active", index=True)
+    event_details: Mapped[str]  = mapped_column(Text,        nullable=False)
+    resolved_at: Mapped[str]    = mapped_column(String(64),  nullable=True)
+    raw_payload: Mapped[dict]   = mapped_column(JSONB, nullable=False, default=dict)
+
+    __table_args__ = (
+        Index("ix_incidents_env_severity", "env", "severity"),
+        Index("ix_incidents_env_status",   "env", "status"),
+        Index("ix_incidents_jsonb",        "raw_payload", postgresql_using="gin"),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Atlas Users & Sessions
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AtlasUser(Base):
+    """Unified user table — login, RBAC, MFA, profile."""
+    __tablename__ = "atlas_users"
+
+    id: Mapped[int]              = mapped_column(Integer, primary_key=True, autoincrement=True)
+    env: Mapped[str]             = mapped_column(String(16),  nullable=False, index=True, default="cloud")
+    email: Mapped[str]           = mapped_column(String(256), nullable=False, unique=True, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(256), nullable=False)
+    name: Mapped[str]            = mapped_column(String(128), nullable=False)
+    role: Mapped[str]            = mapped_column(String(32),  nullable=False, default="Analyst")
+    is_active: Mapped[bool]      = mapped_column(Boolean, nullable=False, default=True)
+    phone: Mapped[str]           = mapped_column(String(64),  nullable=True)
+    avatar: Mapped[str]          = mapped_column(String(512), nullable=True, default="")
+    totp_enabled: Mapped[bool]   = mapped_column(Boolean, nullable=False, default=False)
+    totp_secret: Mapped[str]     = mapped_column(String(128), nullable=True)
+    invite_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[str]      = mapped_column(String(64),  nullable=False, default=_utcnow)
+
+    sessions: Mapped[list["UserSession"]] = relationship(
+        "UserSession", back_populates="user", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("ix_atlas_users_role",      "role"),
+        Index("uq_atlas_users_env_email", "env", "email", unique=True),
+    )
+
+
+class UserSession(Base):
+    """Login session audit log."""
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int]          = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int]     = mapped_column(
+        Integer, ForeignKey("atlas_users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    ip_address: Mapped[str]  = mapped_column(String(64),  nullable=False, default="unknown")
+    location: Mapped[str]    = mapped_column(String(128), nullable=False, default="Unknown")
+    device_info: Mapped[str] = mapped_column(String(256), nullable=False, default="Unknown Device")
+    status: Mapped[str]      = mapped_column(String(128), nullable=False, default="Success")
+    logged_at: Mapped[str]   = mapped_column(String(64),  nullable=False, default=_utcnow)
+
+    user: Mapped["AtlasUser"] = relationship("AtlasUser", back_populates="sessions")
+
+    __table_args__ = (
+        Index("ix_user_sessions_user_logged", "user_id", "logged_at"),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S3 Ingest Cursor
 # ─────────────────────────────────────────────────────────────────────────────
 
 class S3IngestCursor(Base):
-    """
-    One row = one S3 object that has been successfully ingested.
-
-    This table is the idempotency ledger for the S3 background task.
-    Before downloading an object, the task checks this table; if a row
-    already exists for that (bucket, key) pair, the object is skipped.
-
-    `status` values:
-      - "completed"  — all records in the object were parsed and inserted
-      - "partial"    — some records failed parsing; good rows were still saved
-      - "failed"     — the object could not be downloaded or decompressed
-
-    `records_ingested` is 0 for failed objects, enabling easy audit queries:
-        SELECT * FROM s3_ingest_cursor WHERE status != 'completed';
-    """
+    """Idempotency ledger for the S3 background ingest task."""
     __tablename__ = "s3_ingest_cursor"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    bucket: Mapped[str] = mapped_column(String(256), nullable=False)
-    object_key: Mapped[str] = mapped_column(String(1024), nullable=False, index=True)
-    etag: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    records_ingested: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    parse_errors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="completed")
-    ingested_at: Mapped[str] = mapped_column(String(64), nullable=False, default=_utcnow)
+    id: Mapped[int]               = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    bucket: Mapped[str]           = mapped_column(String(256),  nullable=False)
+    object_key: Mapped[str]       = mapped_column(String(1024), nullable=False, index=True)
+    etag: Mapped[str]             = mapped_column(String(64),   nullable=False, default="")
+    size_bytes: Mapped[int]       = mapped_column(BigInteger,   nullable=False, default=0)
+    records_ingested: Mapped[int] = mapped_column(Integer,      nullable=False, default=0)
+    parse_errors: Mapped[int]     = mapped_column(Integer,      nullable=False, default=0)
+    status: Mapped[str]           = mapped_column(String(32),   nullable=False, default="completed")
+    ingested_at: Mapped[str]      = mapped_column(String(64),   nullable=False, default=_utcnow)
 
     __table_args__ = (
-        # The unique constraint prevents concurrent workers from double-ingesting
-        # the same object if multiple ATLAS instances run simultaneously.
         Index("uq_s3_cursor_bucket_key", "bucket", "object_key", unique=True),
     )

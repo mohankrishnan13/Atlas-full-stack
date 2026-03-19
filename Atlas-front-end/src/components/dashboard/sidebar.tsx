@@ -5,13 +5,10 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   Shield,
-  LayoutDashboard,
-  Activity,
+  Radio,
   Network,
   Laptop,
-  Database,
-  AlertTriangle,
-  FileText,
+  FolderOpen,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -19,14 +16,11 @@ import {
 import { cn } from '@/lib/utils';
 
 const navItems = [
-  { icon: LayoutDashboard, label: 'Overview', href: '/overview' },
-  { icon: Activity, label: 'API Monitoring', href: '/api-monitoring' },
-  { icon: Network, label: 'Network Traffic', href: '/network-traffic' },
-  { icon: Laptop, label: 'Endpoint Security', href: '/endpoint-security' },
-  { icon: Database, label: 'Database Monitoring', href: '/database-monitoring' },
-  { icon: AlertTriangle, label: 'Case Management', href: '/incidents' },
-  { icon: FileText, label: 'Reports', href: '/reports' },
-  { icon: Settings, label: 'Settings', href: '/settings' },
+  { icon: Radio,       label: 'Anomaly Command Center', href: '/overview' },
+  { icon: Network,     label: 'Network Traffic',         href: '/network-traffic' },
+  { icon: Laptop,      label: 'Endpoint Security',       href: '/endpoint-security' },
+  { icon: FolderOpen,  label: 'Case Management',         href: '/incidents' },
+  { icon: Settings,    label: 'Settings',                href: '/settings' },
 ];
 
 export function DashboardSidebar() {
@@ -37,7 +31,7 @@ export function DashboardSidebar() {
     <aside
       className={cn(
         'bg-slate-900 border-r border-slate-800 transition-all duration-300 flex flex-col flex-shrink-0',
-        collapsed ? 'w-20' : 'w-[260px]'
+        collapsed ? 'w-20' : 'w-[240px]'
       )}
     >
       {/* Logo */}
@@ -48,8 +42,8 @@ export function DashboardSidebar() {
               <Shield className="w-5 h-5 text-blue-400" />
             </div>
             <div>
-              <div className="text-base font-bold text-slate-50">ATLAS</div>
-              <div className="text-[10px] text-slate-500 -mt-0.5">Anomaly System</div>
+              <div className="text-base font-bold text-slate-50 tracking-wide">ATLAS</div>
+              <div className="text-[10px] text-slate-500 -mt-0.5 tracking-widest uppercase">Anomaly System</div>
             </div>
           </div>
         ) : (
@@ -67,8 +61,9 @@ export function DashboardSidebar() {
             <Link
               key={item.href}
               href={item.href}
+              title={collapsed ? item.label : undefined}
               className={cn(
-                'flex items-center gap-3 px-3 py-2.5 mb-1 rounded-lg transition-all relative',
+                'flex items-center gap-3 px-3 py-2.5 mb-1 rounded-lg transition-all relative group',
                 isActive
                   ? 'bg-blue-500/10 text-blue-400'
                   : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
@@ -78,7 +73,14 @@ export function DashboardSidebar() {
                 <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-blue-500 rounded-r" />
               )}
               <item.icon className="w-5 h-5 flex-shrink-0" />
-              {!collapsed && <span className="text-sm">{item.label}</span>}
+              {!collapsed && (
+                <span className="text-sm font-medium leading-tight">{item.label}</span>
+              )}
+              {collapsed && (
+                <div className="absolute left-full ml-3 px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-xs text-slate-200 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 shadow-lg">
+                  {item.label}
+                </div>
+              )}
             </Link>
           );
         })}
@@ -89,6 +91,7 @@ export function DashboardSidebar() {
         <button
           onClick={() => setCollapsed(!collapsed)}
           className="w-full flex items-center justify-center p-2 hover:bg-slate-800 rounded-lg transition-colors"
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {collapsed ? (
             <ChevronRight className="w-5 h-5 text-slate-400" />

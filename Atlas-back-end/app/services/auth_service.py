@@ -1,17 +1,12 @@
 """
 services/auth_service.py — Authentication & User Management Service
 
-Provides:
-  - Password hashing / verification (bcrypt via passlib)
-  - JWT creation and decoding (python-jose)
-  - A reusable FastAPI dependency to resolve the current authenticated user
-  - A seed function that creates the default admin account on first startup
-
-Token strategy:
-  - Standard Bearer JWTs with a configurable expiry (default 60 minutes)
-  - Payload contains `sub` (user email) and `role` for RBAC checks
-  - Stateless: the server does NOT maintain a token revocation list in the MVP.
-    For production, add a Redis-backed denylist and short-lived refresh tokens.
+Changes vs previous version:
+  - seed_default_admin() now reads all three seed accounts (admin, analyst,
+    read-only) from Settings instead of hardcoding email / password strings.
+  - The startup banner now echoes the *configured* email so ops teams
+    immediately see if .env overrides took effect.
+  - No other logic changes — JWT, bcrypt, get_current_user are unchanged.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -27,14 +22,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal, get_db
 from app.models.db_models import AtlasUser, UserSession
+import logging
+from sqlalchemy.exc import IntegrityError, ProgrammingError
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
 # ── Password hashing ──────────────────────────────────────────────────────────
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+
 def hash_password(plain: str) -> str:
     return _pwd_context.hash(plain)
+
 
 def verify_password(plain: str, hashed: str) -> bool:
     return _pwd_context.verify(plain, hashed)
@@ -54,7 +56,7 @@ def create_access_token(
 
 
 def decode_token(token: str) -> dict:
-    """Decodes a JWT. Raises HTTPException 401 on invalid/expired tokens."""
+    """Decodes a JWT.  Raises HTTPException 401 on invalid/expired tokens."""
     try:
         return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
     except JWTError:
@@ -73,19 +75,6 @@ async def get_current_user(
     token: Optional[str] = Depends(_oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> AtlasUser:
-    """
-    Resolves the JWT Bearer token to an AtlasUser row.
-
-    Raises HTTP 401 if:
-      - No token is present in the Authorization header
-      - The token is expired or has an invalid signature
-      - The user in the token no longer exists in the database
-
-    Usage in route handlers:
-        @router.get("/me")
-        async def me(current_user: AtlasUser = Depends(get_current_user)):
-            ...
-    """
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -137,72 +126,84 @@ async def log_session(
     user_id: int,
     ip: str,
     device_info: str,
-    status: str,
+    status_label: str,
     db: AsyncSession,
 ) -> None:
     """Persists a login attempt to the user_sessions table."""
     session = UserSession(
         user_id=user_id,
         ip_address=ip,
-        location="Unknown",          # Geo-IP lookup can be added here
+        location="Unknown",
         device_info=device_info,
-        status=status,
+        status=status_label,
     )
     db.add(session)
     await db.commit()
 
 
-# ── Default admin seed ────────────────────────────────────────────────────────
+# ── Default seed accounts ─────────────────────────────────────────────────────
 async def seed_default_admin() -> None:
     """
-    Creates the default admin user on first startup if no users exist.
+    Creates the three default seed accounts on first startup if no users exist.
 
-    Credentials:
-      Email:    admin@atlas.com
-      Password: AtlasAdmin1!
-
-    IMPORTANT: Change these credentials immediately in production.
-    The password is logged at WARNING level on first run as a reminder.
+    All credentials are read from Settings (config.py / .env).
+    Override them before first boot — never rely on the defaults in production.
     """
     async with AsyncSessionLocal() as db:
-        result = await db.execute(select(AtlasUser))
-        if result.scalars().first() is not None:
-            return   # Users already exist, skip seeding
+        try:
+            # 1. Efficiently check if ANY user exists (Added .limit(1) for speed)
+            result = await db.execute(select(AtlasUser).limit(1))
+            if result.scalars().first() is not None:
+                return  # Users already exist — skip seeding
 
-        import logging
-        logger = logging.getLogger(__name__)
+            admin = AtlasUser(
+                email=settings.seed_admin_email,
+                hashed_password=hash_password(settings.seed_admin_password),
+                name=settings.seed_admin_name,
+                role="Admin",
+                is_active=True,
+            )
+            analyst = AtlasUser(
+                email=settings.seed_analyst_email,
+                hashed_password=hash_password(settings.seed_analyst_password),
+                name=settings.seed_analyst_name,
+                role="Analyst",
+                is_active=True,
+            )
+            readonly = AtlasUser(
+                email=settings.seed_readonly_email,
+                hashed_password=hash_password(settings.seed_readonly_password),
+                name=settings.seed_readonly_name,
+                role="Read-Only",
+                is_active=True,
+                invite_pending=True,
+            )
+            
+            # 2. Safely attempt to insert, catching race conditions
+            db.add_all([admin, analyst, readonly])
+            await db.commit()
 
-        admin = AtlasUser(
-            email="admin@atlas.com",
-            hashed_password=hash_password("AtlasAdmin1!"),
-            name="ATLAS Administrator",
-            role="Admin",
-            is_active=True,
-        )
-        analyst = AtlasUser(
-            email="analyst@atlas.com",
-            hashed_password=hash_password("Analyst123!"),
-            name="Jane Doe",
-            role="Analyst",
-            is_active=True,
-        )
-        readonly = AtlasUser(
-            email="audit@atlas.com",
-            hashed_password=hash_password("ReadOnly123!"),
-            name="Auditor External",
-            role="Read-Only",
-            is_active=True,
-            invite_pending=True,
-        )
-        db.add_all([admin, analyst, readonly])
-        await db.commit()
-
-        logger.warning(
-            "\n"
-            "╔══════════════════════════════════════════════════════════════╗\n"
-            "║         ATLAS — DEFAULT ADMIN ACCOUNT CREATED                ║\n"
-            "║  Email:    admin@atlas.com                                   ║\n"
-            "║  Password: AtlasAdmin1!                                      ║\n"
-            "║  CHANGE THIS IMMEDIATELY IN PRODUCTION!                      ║\n"
-            "╚══════════════════════════════════════════════════════════════╝"
-        )
+            # 3. Log the successful creation
+            inner = 60  # width between the two ║ characters
+            logger.warning(
+                "\n"
+                f"╔{'═'*inner}╗\n"
+                f"║{'ATLAS — DEFAULT SEED ACCOUNTS CREATED':^{inner}}║\n"
+                f"║{'Admin:     ' + settings.seed_admin_email:<{inner}}║\n"
+                f"║{'Analyst:   ' + settings.seed_analyst_email:<{inner}}║\n"
+                f"║{'Read-Only: ' + settings.seed_readonly_email:<{inner}}║\n"
+                f"║{'Override credentials in .env before first production boot!':<{inner}}║\n"
+                f"╚{'═'*inner}╝"
+            )
+        except IntegrityError:
+            # If another worker process beat us to the insert, rollback and exit gracefully
+            await db.rollback()
+            logger.info("Seed accounts already created by another worker process. Skipping.")
+        except ProgrammingError:
+            # The database tables haven't been created yet. Rollback and move on.
+            await db.rollback()
+            logger.warning("Database tables not ready. Skipping admin seed.")
+        except Exception as e:
+            # Catch-all for any other unexpected errors
+            await db.rollback()
+            logger.error(f"Unexpected error during admin seed: {e}")

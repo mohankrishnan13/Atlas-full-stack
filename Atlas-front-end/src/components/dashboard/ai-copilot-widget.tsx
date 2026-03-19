@@ -1,7 +1,7 @@
-"use client";
+'use client';
 
-import React, { useState } from 'react';
-import { Bot, Send, X, LoaderCircle } from 'lucide-react';
+import React from 'react';
+import { Bot, Send, LoaderCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -11,46 +11,17 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Input } from '@/components/ui/input';
-import { useForm, type SubmitHandler } from 'react-hook-form';
-import { askAICopilot, type AICopilotChatInput } from '@/ai/flows/ai-copilot-chat-widget';
+import { useChat } from '@ai-sdk/react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Avatar, AvatarFallback } from '../ui/avatar';
 import { cn } from '@/lib/utils';
 
-type Message = {
-  role: 'user' | 'assistant';
-  content: string;
-};
-
-type Inputs = {
-  question: string;
-};
 
 export function AiCopilotWidget() {
-  const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-
-  const { register, handleSubmit, reset } = useForm<Inputs>();
-
-  const onSubmit: SubmitHandler<Inputs> = async (data) => {
-    const userMessage: Message = { role: 'user', content: data.question };
-    setMessages(prev => [...prev, userMessage]);
-    setIsLoading(true);
-    reset();
-
-    try {
-      const result = await askAICopilot({ question: data.question });
-      const assistantMessage: Message = { role: 'assistant', content: result.answer };
-      setMessages(prev => [...prev, assistantMessage]);
-    } catch (error) {
-      const errorMessage: Message = { role: 'assistant', content: "Sorry, I couldn't process your request. Please try again." };
-      setMessages(prev => [...prev, errorMessage]);
-      console.error("AI Copilot Error:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const [isOpen, setIsOpen] = React.useState(false);
+  const { messages, input, handleInputChange, handleSubmit, isLoading } = useChat({
+    api: '/api/copilot',
+  });
 
   return (
     <>
@@ -80,20 +51,20 @@ export function AiCopilotWidget() {
                     <p className="text-xs mt-2">e.g., "Summarize critical alerts from the last 24 hours."</p>
                 </div>
               )}
-              {messages.map((message, index) => (
-                <div key={index} className={cn("flex items-start gap-3", message.role === 'user' ? "justify-end" : "justify-start")}>
-                  {message.role === 'assistant' && <Avatar className="w-8 h-8"><AvatarFallback><Bot size={20}/></AvatarFallback></Avatar>}
+              {messages.map((m) => (
+                <div key={m.id} className={cn("flex items-start gap-3", m.role === 'user' ? "justify-end" : "justify-start")}>
+                  {m.role === 'assistant' && <Avatar className="w-8 h-8"><AvatarFallback><Bot size={20}/></AvatarFallback></Avatar>}
                   <div
                     className={cn(
                       "max-w-[80%] rounded-lg p-3 text-sm",
-                      message.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary'
+                      m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary'
                     )}
                   >
-                    {message.content}
+                    {m.content}
                   </div>
                 </div>
               ))}
-              {isLoading && (
+               {isLoading && (
                  <div className="flex items-start gap-3 justify-start">
                     <Avatar className="w-8 h-8"><AvatarFallback><Bot size={20}/></AvatarFallback></Avatar>
                     <div className="bg-secondary rounded-lg p-3">
@@ -104,14 +75,14 @@ export function AiCopilotWidget() {
             </div>
           </ScrollArea>
           <DialogFooter>
-            <form onSubmit={handleSubmit(onSubmit)} className="flex w-full items-center space-x-2">
+            <form onSubmit={handleSubmit} className="flex w-full items-center space-x-2">
               <Input
-                {...register('question', { required: true })}
+                value={input}
+                onChange={handleInputChange}
                 placeholder="Ask a question..."
                 autoComplete="off"
-                disabled={isLoading}
               />
-              <Button type="submit" size="icon" disabled={isLoading}>
+              <Button type="submit" size="icon">
                 <Send className="h-4 w-4" />
               </Button>
             </form>
