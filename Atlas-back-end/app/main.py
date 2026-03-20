@@ -3,11 +3,18 @@ main.py — ATLAS FastAPI Application
 
 Startup sequence (lifespan):
   1. seed_default_admin()         — Seeds admin accounts (idempotent)
-  2. seed_applications_config()   — Seeds Apps / Microservices (idempotent)
+  2. _seed_applications_config()  — Seeds Apps / Microservices (idempotent)
   3. _start_wazuh_sync()          — Background Wazuh poll task (every 60s)
-  4. anomaly_worker()             — NEW: Background anomaly detection (every 60s)
+  4. anomaly_worker()             — Background anomaly detection (every 60s)
 
-Note: Table creation is handled strictly by Alembic migrations externally.
+Note: Table creation is handled strictly by Alembic migrations. The Dockerfile
+CMD runs `alembic upgrade head` before uvicorn starts, so tables are guaranteed
+to exist before any background task queries them.
+
+The ProgrammingError safety nets below are a belt-and-suspenders fallback: if
+somehow uvicorn starts before Alembic finishes (e.g. manual dev run without
+the migration step), the background tasks log a warning and wait 10 seconds
+instead of crash-looping.
 """
 
 import asyncio
@@ -18,21 +25,23 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text, select, desc
-from sqlalchemy.exc import IntegrityError, ProgrammingError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal, close_db, get_db
 from app.services.auth_service import seed_default_admin, get_current_user
 from app.services.wazuh_service import WazuhCollector
-from app.services.anomaly_engine import anomaly_worker          # NEW
-from app.models.db_models import Application, AppConfig, Microservice, AnomalyEvent, AtlasUser
+from app.services.anomaly_engine import anomaly_worker
+from app.models.db_models import (
+    Application, AppConfig, Microservice, AnomalyEvent, AtlasUser,
+)
 
 from app.api.routes_auth import router as auth_router
 from app.api.routes_dashboard import router as dashboard_router
 from app.api.routes_settings import router as settings_router
 from app.api.routes_actions import router as actions_router
-from app.api.routes_simulation import router as simulation_router   # NEW
+from app.api.routes_simulation import router as simulation_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,6 +51,8 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
+
+# ── Seed helpers ──────────────────────────────────────────────────────────────
 
 async def _seed_applications_config() -> None:
     """Seeds Applications, Microservices, and AppConfigs. Idempotent."""
@@ -96,16 +107,33 @@ async def _seed_applications_config() -> None:
                         db.add(AppConfig(env=env, app_id=app_id))
 
             await db.commit()
-        except (IntegrityError, ProgrammingError):
-            await db.rollback()
-            logger.info("Application config seed skipped.")
-        except Exception as e:
-            await db.rollback()
-            logger.error("Unexpected error during app config seed: %s", e)
 
+        except (IntegrityError, ProgrammingError, OperationalError) as exc:
+            # ProgrammingError  → table doesn't exist yet (Alembic not run)
+            # OperationalError  → DB not reachable yet
+            # IntegrityError    → concurrent insert beat us (harmless)
+            await db.rollback()
+            logger.warning(
+                "Application config seed skipped (%s: %s). "
+                "This is normal if Alembic has not been run yet.",
+                type(exc).__name__, exc,
+            )
+        except Exception as exc:
+            await db.rollback()
+            logger.error("Unexpected error during app config seed: %s", exc, exc_info=True)
+
+
+# ── Background tasks ──────────────────────────────────────────────────────────
 
 async def _start_wazuh_sync() -> None:
-    """Background coroutine: polls Wazuh every minute for new alerts."""
+    """
+    Background coroutine: polls Wazuh every 60 seconds for new alerts.
+
+    Safety net: if ProgrammingError or OperationalError is raised (tables not
+    yet created or DB unreachable), the task logs a warning and waits 10 seconds
+    before retrying rather than entering a tight crash-log loop.
+    This handles the edge case where uvicorn starts before Alembic finishes.
+    """
     collector = WazuhCollector()
     while True:
         try:
@@ -113,27 +141,51 @@ async def _start_wazuh_sync() -> None:
             async with AsyncSessionLocal() as db:
                 await collector.sync_alerts(db)
             logger.info("[WazuhSync] Sync complete.")
+
         except asyncio.CancelledError:
             logger.info("[WazuhSync] Cancelled — shutting down.")
             break
+
+        except (ProgrammingError, OperationalError) as exc:
+            # ── Safety net: tables not ready yet ─────────────────────────────
+            logger.warning(
+                "[WazuhSync] Database not ready (%s). "
+                "Waiting 10s before retry — check that Alembic has run.",
+                type(exc).__name__,
+            )
+            await asyncio.sleep(10)
+            continue   # skip the 60-second sleep below; retry quickly
+
         except Exception as exc:
             logger.error("[WazuhSync] Error: %s", exc, exc_info=True)
+
         await asyncio.sleep(60)
 
+
+# ── Lifespan ──────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting %s (env: %s) ...", settings.app_name, settings.app_env)
 
+    # Seed initial data. The Dockerfile guarantees Alembic has already run,
+    # so tables exist here. The try/except below handles the manual-dev case.
     try:
         await seed_default_admin()
         await _seed_applications_config()
-    except (IntegrityError, ProgrammingError):
-        logger.warning("Database not ready — skipping seed.")
+    except (ProgrammingError, OperationalError) as exc:
+        logger.warning(
+            "Database seed skipped on startup (%s). "
+            "Run `alembic upgrade head` then restart.",
+            type(exc).__name__,
+        )
 
-    wazuh_task = asyncio.create_task(_start_wazuh_sync())
-    engine_task = asyncio.create_task(anomaly_worker())      # NEW
-    logger.info("%s startup complete. Wazuh sync + Anomaly Engine active.", settings.app_name)
+    wazuh_task  = asyncio.create_task(_start_wazuh_sync())
+    engine_task = asyncio.create_task(anomaly_worker())
+    logger.info(
+        "%s startup complete. Wazuh sync + Anomaly Engine active.",
+        settings.app_name,
+    )
 
     yield
 
@@ -147,6 +199,8 @@ async def lifespan(app: FastAPI):
     await close_db()
     logger.info("Shutdown complete.")
 
+
+# ── FastAPI application ───────────────────────────────────────────────────────
 
 app = FastAPI(
     title="ATLAS — Advanced Traffic Layer Anomaly System",
@@ -169,26 +223,18 @@ app.include_router(auth_router)
 app.include_router(dashboard_router)
 app.include_router(settings_router)
 app.include_router(actions_router)
-app.include_router(simulation_router)    # NEW
+app.include_router(simulation_router)
 
 
 # ── AnomalyEvent REST endpoints ───────────────────────────────────────────────
 
-@app.get(
-    "/anomalies",
-    tags=["Anomaly Engine"],
-    summary="List recent AI-detected anomalies",
-)
+@app.get("/anomalies", tags=["Anomaly Engine"], summary="List recent AI-detected anomalies")
 async def list_anomalies(
     limit: int = 50,
     status: str = "",
     db: AsyncSession = Depends(get_db),
     current_user: AtlasUser = Depends(get_current_user),
 ):
-    """
-    Returns the most recent AnomalyEvent records for the current user's environment.
-    Optionally filter by status (Active / Acknowledged / Resolved).
-    """
     q = select(AnomalyEvent).where(AnomalyEvent.env == current_user.env)
     if status:
         q = q.where(AnomalyEvent.status == status)
@@ -224,6 +270,7 @@ async def acknowledge_anomaly(
     db: AsyncSession = Depends(get_db),
     current_user: AtlasUser = Depends(get_current_user),
 ):
+    from fastapi import HTTPException
     result = await db.execute(
         select(AnomalyEvent).where(
             AnomalyEvent.id == anomaly_id,
@@ -232,7 +279,6 @@ async def acknowledge_anomaly(
     )
     event = result.scalar_one_or_none()
     if not event:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Anomaly not found.")
     event.status = "Acknowledged"
     await db.commit()
@@ -252,6 +298,8 @@ async def global_exception_handler(request, exc: Exception):
         },
     )
 
+
+# ── Health endpoints ──────────────────────────────────────────────────────────
 
 @app.get("/", tags=["Health"])
 async def root():

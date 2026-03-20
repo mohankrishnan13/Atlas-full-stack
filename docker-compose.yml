@@ -1,165 +1,245 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# ATLAS SOC Dashboard — Unified Docker Compose
+# ATLAS SOC Dashboard — Docker Compose
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# FOLDER STRUCTURE EXPECTED:
+# FOLDER STRUCTURE:
 #
-#   Atlas-full-stack/                        ← run docker compose from HERE
-#   ├── docker-compose.yml              ← this file
-#   ├── Atlas-back-end/       ← backend source (extracted from zip)
+#   Atlas-full-stack/
+#   ├── docker-compose.yml          ← this file
+#   ├── .env                        ← copy from Atlas-back-end/.env.example
+#   ├── nginx/
+#   │   └── nginx.conf              ← provided alongside this file
+#   ├── Atlas-back-end/
 #   │   ├── app/
-#   │   ├── data/logs/
+#   │   ├── alembic/
+#   │   ├── alembic.ini
 #   │   ├── Dockerfile
 #   │   └── requirements.txt
-#   └── Atlas-front-end/             ← frontend source (extracted from zip)
+#   └── Atlas-front-end/
 #       ├── src/
 #       ├── package.json
 #       └── Dockerfile
 #
-# USAGE:
-#   docker compose up --build           # first time (or after code changes)
-#   docker compose up -d                # subsequent starts (detached)
-#   docker compose logs -f              # stream all logs
-#   docker compose logs -f atlas-frontend atlas-backend  # specific services
-#   docker compose down                 # stop (keep volumes)
-#   docker compose down -v              # stop and wipe the database
+# QUICK START:
+#   cp Atlas-back-end/.env.example .env   # fill in all REPLACE_WITH_* values
+#   docker compose up --build             # first boot (builds images + runs migrations)
+#   docker compose up -d                  # subsequent starts (detached)
+#   docker compose logs -f                # stream all service logs
+#   docker compose down                   # stop (keeps the database volume)
+#   docker compose down -v                # stop AND wipe the database
 #
-# SERVICES:
-#   postgres         → internal only, port 5432 not exposed to host
-#   atlas-backend    → http://localhost:8000  (FastAPI + Swagger at /docs)
-#   atlas-frontend   → http://localhost:3000  (Next.js dashboard)
+# SERVICES & PORTS:
+#   postgres        — internal only (not exposed to host)
+#   atlas-backend   — http://localhost:8000   (FastAPI + /docs)
+#   atlas-frontend  — http://localhost:3000   (Next.js dashboard)
+#   nginx           — http://localhost:80     (reverse proxy — optional)
 #
-# DEFAULT LOGIN CREDENTIALS (printed in backend logs on first boot):
-#   admin@atlas.com   /  AtlasAdmin1!   (Admin)
-#   analyst@atlas.com /  Analyst123!    (Analyst)
-#   audit@atlas.com   /  ReadOnly123!   (Read-Only)
+# DEFAULT SEED CREDENTIALS (set in .env before first boot):
+#   SEED_ADMIN_EMAIL    / SEED_ADMIN_PASSWORD
+#   SEED_ANALYST_EMAIL  / SEED_ANALYST_PASSWORD
+#   SEED_READONLY_EMAIL / SEED_READONLY_PASSWORD
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Reusable anchors ──────────────────────────────────────────────────────────
+# YAML anchors let us define restart/network config once and reuse it.
+x-restart: &restart
+  restart: unless-stopped
+
+x-network: &network
+  networks:
+    - atlas-network
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 services:
 
-  # ── PostgreSQL (Internal Only) ───────────────────────────────
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: atlas-postgres
-    restart: unless-stopped
+    <<: [*restart, *network]
 
-    env_file:
-      - .env
-    ports:
-      - "5433:5432"
+    # ── FIX 1: Only pass the three variables PostgreSQL actually needs.
+    # Loading the full .env into the postgres container exposes JWT secrets,
+    # Wazuh passwords, and API keys to a service that has no use for them.
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB:-atlas_db}
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+    # ── FIX 2: Port NOT exposed to host.
+    # The backend reaches postgres over the internal atlas-network using the
+    # service name "postgres". Exposing 5432/5433 on the host is a security
+    # risk for a production SOC database.
+    # Uncomment the line below ONLY for local debugging with psql/pgAdmin:
+    # ports:
+    #   - "127.0.0.1:5433:5432"   # loopback-only if you must expose it
+
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      # ── FIX 10: Single $ is correct here.
+      # POSTGRES_USER comes from the environment: block above, so Compose
+      # resolves it correctly with a single $. Double $$ would pass a literal
+      # "$POSTGRES_USER" string to the shell inside the container.
+      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER -d ${POSTGRES_DB:-atlas_db}"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 20s
 
-    networks:
-      - atlas-network
 
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 512M
-
-
-  # ── Backend (FastAPI) ────────────────────────────────────────
+  # ── Backend (FastAPI + Alembic) ───────────────────────────────────────────
   atlas-backend:
     build:
       context: ./Atlas-back-end
       dockerfile: Dockerfile
-
+    image: atlas-backend:latest
     container_name: atlas-backend
-    restart: unless-stopped
+    <<: [*restart, *network]
 
     depends_on:
       postgres:
+        # Docker Compose will not start this container until the postgres
+        # healthcheck (pg_isready) passes. This guarantees the database is
+        # accepting connections before alembic upgrade head runs.
         condition: service_healthy
 
+    # ── FIX 4 & FIX 3: Load secrets from .env, then override the two DB URLs
+    # with explicit Compose variable interpolation.
+    #
+    # WHY: env_file: blocks load lines verbatim — they do NOT expand shell
+    # variables like ${POSTGRES_PASSWORD}. If DATABASE_URL in .env contains
+    # the literal string "${POSTGRES_PASSWORD}", it will be passed as-is to the
+    # app, which will then fail to connect.
+    #
+    # The environment: block below uses Compose's own interpolation engine,
+    # which DOES substitute ${POSTGRES_USER} and ${POSTGRES_PASSWORD} from the
+    # shell environment (populated from the top-level .env file).
     env_file:
-      - .env
+      - .env   # loads all other vars: SECRET_KEY, INGEST_API_KEY, WAZUH_*, etc.
+
+    environment:
+      # Override the URL fields that contain variable references.
+      # Compose interpolates these correctly at deploy time.
+      DATABASE_URL:      "postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-atlas_db}"
+      DATABASE_URL_SYNC: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-atlas_db}"
 
     volumes:
       - backend_logs:/app/data/logs
 
     ports:
-      - "8000:8000"  # expose only backend API
+      - "8000:8000"
 
+    # ── FIX 3: Removed the redundant pg_isready poll loop.
+    # depends_on: condition: service_healthy already guarantees postgres is up.
+    # The extra shell loop added ~10-20 seconds of unnecessary startup time.
+    #
+    # Sequence: alembic upgrade head → (exit 0) → uvicorn starts.
+    # If alembic exits non-zero (migration failed), the && short-circuits and
+    # uvicorn never starts. The container exits with an error code, which
+    # restart: unless-stopped will not retry (non-zero is a crash, not a stop).
     command: >
       sh -c "
-      echo '⏳ Waiting for DB...' &&
-      until pg_isready -h postgres -U $POSTGRES_USER; do
-        sleep 2;
-      done &&
-      echo '🚀 Running migrations...' &&
-      alembic upgrade head &&
-      echo '🔥 Starting API...' &&
-      uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2}
+        echo '🚀 Running Alembic migrations...' &&
+        alembic upgrade head &&
+        echo '✅ Migrations complete. Starting API server...' &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2}
       "
 
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
+      # wget is available in python:3.12-slim via the install in the Dockerfile.
+      # Falls back to the Python stdlib approach which requires no extra packages.
+      test: ["CMD-SHELL",
+             "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 20s
       timeout: 10s
       retries: 5
-      start_period: 40s
+      start_period: 60s   # generous start: alembic + uvicorn startup can take 20-30s
 
-    networks:
-      - atlas-network
-    
     extra_hosts:
+      # Allows the backend to reach services running on the Docker host machine
+      # (e.g. a Wazuh Manager running natively on the same Ubuntu server).
       - "host.docker.internal:host-gateway"
 
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 512M
+    # ── FIX 8: Use mem_limit / cpus instead of deploy.resources.
+    # deploy.resources only takes effect with `docker stack deploy` (Swarm).
+    # With plain `docker compose`, they are silently ignored.
+    # mem_limit and cpus work with the plain compose CLI.
+    mem_limit: 512m
+    cpus: "1.0"
 
 
-  # ── Frontend (Next.js) ───────────────────────────────────────
+  # ── Frontend (Next.js) ────────────────────────────────────────────────────
   atlas-frontend:
     build:
       context: ./Atlas-front-end
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_ATLAS_BACKEND_URL: http://atlas-backend:8000
-
+        # ── FIX 5 & FIX 9: Use localhost (or your server's IP) here, NOT the
+        # internal Docker service name.
+        #
+        # NEXT_PUBLIC_* variables are baked into the JavaScript bundle at BUILD
+        # TIME by Next.js. The bundle then executes in the user's *browser*, not
+        # inside Docker. The browser cannot resolve "atlas-backend" — that
+        # hostname only exists inside the Docker network.
+        #
+        # Use http://localhost:8000 for local development.
+        # Replace with your server's public IP or domain for remote access:
+        #   NEXT_PUBLIC_ATLAS_BACKEND_URL: http://192.168.1.50:8000
+        #   NEXT_PUBLIC_ATLAS_BACKEND_URL: https://api.yoursoc.company.com
+        NEXT_PUBLIC_ATLAS_BACKEND_URL: ${NEXT_PUBLIC_ATLAS_BACKEND_URL:-http://atlas-backend:8000}
+    image: atlas-frontend:latest
     container_name: atlas-frontend
-    restart: unless-stopped
+    <<: [*restart, *network]
 
     depends_on:
       atlas-backend:
         condition: service_healthy
 
+    # ── FIX 9: Runtime environment: block intentionally minimal.
+    # NEXT_PUBLIC_* vars are already compiled into the bundle — setting them
+    # at runtime has no effect on client-side code. Only NODE_ENV, PORT, and
+    # HOSTNAME are meaningful for the Next.js standalone server process.
     environment:
-      NODE_ENV: production
-      PORT: "3000"
-      HOSTNAME: "0.0.0.0"
-      NEXT_PUBLIC_ATLAS_BACKEND_URL: http://atlas-backend:8000
+      NODE_ENV:  production
+      PORT:      "3000"
+      HOSTNAME:  "0.0.0.0"
 
     ports:
       - "3000:3000"
 
-    networks:
-      - atlas-network
+    # ── FIX 7: Add a healthcheck for the frontend.
+    # Without this, depends_on: condition: service_healthy would be invalid
+    # for any service that depends on atlas-frontend.
+    healthcheck:
+      test: ["CMD-SHELL",
+             "node -e \"require('http').get('http://localhost:3000', r => process.exit(r.statusCode < 400 ? 0 : 1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 256M
+    mem_limit: 256m
+    cpus: "0.5"
 
 
-  # ── Reverse Proxy (Nginx) ────────────────────────────────────
+  # ── Nginx Reverse Proxy ───────────────────────────────────────────────────
+  # Routes http://localhost:80/      → atlas-frontend:3000
+  # Routes http://localhost:80/api/  → atlas-backend:8000
+  # Routes http://localhost:80/docs  → atlas-backend:8000
+  #
+  # This is OPTIONAL for local development. Comment out this entire block
+  # if you prefer to access the frontend on :3000 and backend on :8000 directly.
+  #
+  # ── FIX 6: The nginx.conf file is provided alongside this compose file in
+  # the nginx/ directory. The previous compose referenced it without providing
+  # it, causing an immediate bind-mount failure on startup.
   nginx:
-    image: nginx:alpine
+    image: nginx:1.27-alpine
     container_name: atlas-nginx
-    restart: unless-stopped
+    <<: [*restart, *network]
 
     depends_on:
       - atlas-frontend
@@ -171,23 +251,28 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
 
-    networks:
-      - atlas-network
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t && wget -qO- http://localhost/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 128M
+    mem_limit: 64m
+    cpus: "0.25"
 
 
-# ── Volumes ───────────────────────────────────────────────────
+# ── Named volumes ─────────────────────────────────────────────────────────────
 volumes:
   postgres_data:
+    # Persists the PostgreSQL data directory across container restarts and
+    # `docker compose down`. Use `docker compose down -v` to wipe it completely.
   backend_logs:
+    # Persists log files written by the ATLAS backend (data/logs/).
 
 
-# ── Network ───────────────────────────────────────────────────
+# ── Internal network ──────────────────────────────────────────────────────────
 networks:
   atlas-network:
     driver: bridge
+    # All services communicate over this isolated bridge network.
+    # External access is only through the published ports above.

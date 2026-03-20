@@ -34,7 +34,6 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 # If you STILL want build-time API URL, keep this.
 # Otherwise, remove and rely on Nginx (/api proxy)
-ARG NEXT_PUBLIC_ATLAS_BACKEND_URL=http://atlas-backend:8000
 ENV NEXT_PUBLIC_ATLAS_BACKEND_URL=$NEXT_PUBLIC_ATLAS_BACKEND_URL
 
 # Copy dependencies

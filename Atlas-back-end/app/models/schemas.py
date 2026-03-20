@@ -146,6 +146,7 @@ class AlertTypeDistribution(BaseModel):
 
 class WazuhEvent(BaseModel):
     id: int
+    timestamp: str
     workstationId: str
     employee: str
     avatar: str

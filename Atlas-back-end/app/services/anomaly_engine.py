@@ -26,6 +26,12 @@ the last 10 minutes. This prevents flooding the UI during an active attack.
 
 Gemini graceful degradation: If the Gemini API is unavailable or not configured,
 the anomaly is still stored — only `ai_explanation` is left NULL.
+
+ProgrammingError / OperationalError safety net: If the database tables do not
+exist yet (e.g. Alembic has not run, or the DB is still starting up), the worker
+logs a warning and waits 10 seconds before retrying instead of crash-looping.
+The Dockerfile guarantees Alembic runs before uvicorn starts, so this path
+should only be hit in manual local development without running migrations first.
 """
 
 import asyncio
@@ -35,6 +41,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import case, func, select, and_
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
@@ -206,7 +213,6 @@ async def _create_anomaly(
 ) -> None:
     """Creates an AnomalyEvent row and enriches it with a Gemini explanation."""
 
-    # Check deduplication before doing the (expensive) Gemini call
     if await _is_duplicate(db, env, anomaly_type, target_app):
         logger.debug(
             "[AnomalyEngine] Dedup: %s / %s / %s already active. Skipping.",
@@ -219,9 +225,8 @@ async def _create_anomaly(
         anomaly_type, severity, target_app,
     )
 
-    # Build the Gemini prompt and call the API
-    context = {"target_app": target_app, "source_ip": source_ip, "endpoint": endpoint}
-    prompt = _build_gemini_prompt(anomaly_type, metrics, context)
+    ctx = {"target_app": target_app, "source_ip": source_ip, "endpoint": endpoint}
+    prompt = _build_gemini_prompt(anomaly_type, metrics, ctx)
     ai_explanation = await _call_gemini(prompt)
 
     event = AnomalyEvent(
@@ -240,12 +245,12 @@ async def _create_anomaly(
     db.add(event)
     await db.commit()
     logger.info(
-        "[AnomalyEngine] AnomalyEvent saved (id will be assigned). AI explanation: %s",
+        "[AnomalyEngine] AnomalyEvent saved. AI explanation: %s",
         "present" if ai_explanation else "absent",
     )
 
 
-# ── Per-signal detection functions ───────────────────────────────────────────
+# ── Per-signal detection functions ────────────────────────────────────────────
 
 async def _check_api_anomalies(db: AsyncSession, env: str) -> None:
     """
@@ -257,7 +262,6 @@ async def _check_api_anomalies(db: AsyncSession, env: str) -> None:
     """
     window_start = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-    # ── Aggregate query: total calls, error count, avg latency ───────────
     agg = await db.execute(
         select(
             func.count(ApiLog.id).label("total_calls"),
@@ -287,7 +291,6 @@ async def _check_api_anomalies(db: AsyncSession, env: str) -> None:
     avg_latency: float = float(row.avg_latency_ms or 0.0)
     top_app: str = row.top_app or "Unknown"
     top_endpoint: str = row.top_endpoint or "/"
-
     error_rate: float = error_count / total_calls if total_calls else 0.0
 
     metrics_base = {
@@ -298,15 +301,12 @@ async def _check_api_anomalies(db: AsyncSession, env: str) -> None:
         "window_minutes": 5,
     }
 
-    # ── HIGH_ERROR_RATE ───────────────────────────────────────────────────
     if error_rate > API_ERROR_RATE_THRESHOLD:
         await _create_anomaly(
             db=db, env=env,
             anomaly_type="HIGH_ERROR_RATE",
             severity="Critical" if error_rate > 0.4 else "High",
-            target_app=top_app,
-            source_ip="",
-            endpoint=top_endpoint,
+            target_app=top_app, source_ip="", endpoint=top_endpoint,
             description=(
                 f"Error rate {error_rate * 100:.1f}% ({error_count}/{total_calls} requests) "
                 f"on {top_app} {top_endpoint} in the last 5 min."
@@ -314,15 +314,12 @@ async def _check_api_anomalies(db: AsyncSession, env: str) -> None:
             metrics={**metrics_base, "endpoint": top_endpoint},
         )
 
-    # ── API_SPIKE ─────────────────────────────────────────────────────────
     if total_calls > API_BASELINE_CALLS_PER_5MIN * API_SPIKE_MULTIPLIER:
         await _create_anomaly(
             db=db, env=env,
             anomaly_type="API_SPIKE",
             severity="High",
-            target_app=top_app,
-            source_ip="",
-            endpoint=top_endpoint,
+            target_app=top_app, source_ip="", endpoint=top_endpoint,
             description=(
                 f"API spike: {total_calls:,} calls in 5 min "
                 f"(baseline ~{API_BASELINE_CALLS_PER_5MIN:,}) on {top_app}."
@@ -330,15 +327,12 @@ async def _check_api_anomalies(db: AsyncSession, env: str) -> None:
             metrics={**metrics_base, "call_count": total_calls, "baseline": API_BASELINE_CALLS_PER_5MIN},
         )
 
-    # ── HIGH_LATENCY ──────────────────────────────────────────────────────
     if avg_latency > API_HIGH_LATENCY_MS:
         await _create_anomaly(
             db=db, env=env,
             anomaly_type="HIGH_LATENCY",
             severity="High",
-            target_app=top_app,
-            source_ip="",
-            endpoint=top_endpoint,
+            target_app=top_app, source_ip="", endpoint=top_endpoint,
             description=(
                 f"Avg latency {avg_latency:.0f}ms on {top_app} "
                 f"(threshold {API_HIGH_LATENCY_MS:.0f}ms)."
@@ -346,7 +340,6 @@ async def _check_api_anomalies(db: AsyncSession, env: str) -> None:
             metrics={**metrics_base},
         )
 
-    # ── BRUTE_FORCE — 401s on login-like endpoints ────────────────────────
     bf = await db.execute(
         select(
             func.count(ApiLog.id).label("failures"),
@@ -394,7 +387,6 @@ async def _check_network_anomalies(db: AsyncSession, env: str) -> None:
     """
     window_start = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-    # ── Total bytes transferred ───────────────────────────────────────────
     net_agg = await db.execute(
         select(
             func.sum(NetworkLog.bytes_transferred).label("total_bytes"),
@@ -433,7 +425,6 @@ async def _check_network_anomalies(db: AsyncSession, env: str) -> None:
             },
         )
 
-    # ── Port scan — single IP hitting many distinct ports ─────────────────
     scan_agg = await db.execute(
         select(
             NetworkLog.source_ip,
@@ -472,22 +463,11 @@ async def _check_network_anomalies(db: AsyncSession, env: str) -> None:
 
 async def _check_endpoint_anomalies(db: AsyncSession, env: str) -> None:
     """
-    Checks for MALWARE_OUTBREAK: counts EndpointLog rows with is_malware=True
-    that were inserted in the last 5 minutes.
-
-    EndpointLog lacks a native DateTime column on legacy rows. We approximate
-    recency by comparing against the maximum id from 5 minutes ago. Simulator
-    rows use current timestamps in their string `timestamp` field, which we
-    parse via PostgreSQL's to_timestamp() only for rows where it's ISO-format.
-
-    Strategy: take the top-N recent rows by id (autoincrement = insertion order)
-    and count malware within that window. This is conservative but avoids
-    a full table scan with string→timestamp casting on every row.
+    Checks for MALWARE_OUTBREAK using recent rows by id as a time proxy.
+    EndpointLog lacks a native DateTime column on legacy rows; we use the
+    top-200 most-recent rows by autoincrement id as the 5-minute window.
     """
-    # Get the id of the row inserted ~5 minutes ago as a recency fence.
-    # We fetch the maximum id from rows whose string timestamp parses correctly.
-    # For robustness we just use the top 200 most-recent rows as our window.
-    RECENT_WINDOW = 200  # rows, not seconds — enough for a 5-min burst
+    RECENT_WINDOW = 200
 
     recent_max = await db.execute(
         select(func.max(EndpointLog.id)).where(EndpointLog.env == env)
@@ -518,8 +498,7 @@ async def _check_endpoint_anomalies(db: AsyncSession, env: str) -> None:
             anomaly_type="MALWARE_OUTBREAK",
             severity="Critical",
             target_app=malware_row.top_app or "Unknown",
-            source_ip="",
-            endpoint="",
+            source_ip="", endpoint="",
             description=(
                 f"Malware outbreak: {malware_row.malware_count} infected endpoints "
                 f"on {malware_row.top_app} in recent window."
@@ -537,7 +516,16 @@ async def anomaly_worker() -> None:
     """
     Infinite background loop that runs all anomaly checks every 60 seconds.
     Spawned as an asyncio Task in main.py lifespan.
-    Each check runs in its own DB session to prevent long-held transactions.
+
+    Error handling layers:
+      1. Inner try/except per env — catches check failures without killing
+         the entire cycle. Rolls back the session and logs the error.
+      2. ProgrammingError / OperationalError — tables not ready or DB down.
+         Logs a warning and waits 10 seconds before the next cycle (does NOT
+         enter a tight loop). This is the safety net for the case where uvicorn
+         starts before Alembic finishes in a manual dev environment.
+      3. CancelledError — clean shutdown when the FastAPI lifespan exits.
+      4. Outer generic Exception — unexpected errors; logs and waits 10s.
     """
     logger.info("[AnomalyEngine] Worker started. Detection interval: 60s.")
 
@@ -551,6 +539,23 @@ async def anomaly_worker() -> None:
                         await _check_api_anomalies(db, env)
                         await _check_network_anomalies(db, env)
                         await _check_endpoint_anomalies(db, env)
+
+                    except (ProgrammingError, OperationalError) as exc:
+                        # ── Safety net: tables not ready yet ─────────────────
+                        # This happens when uvicorn starts before Alembic has
+                        # created the tables. Log once and let the outer loop
+                        # handle the 10-second wait on the next iteration.
+                        await db.rollback()
+                        logger.warning(
+                            "[AnomalyEngine] Database not ready for env=%s (%s: %s). "
+                            "Will retry after next sleep. "
+                            "Ensure `alembic upgrade head` has been run.",
+                            env, type(exc).__name__, exc,
+                        )
+                        # Re-raise to the outer loop so it catches it and
+                        # waits 10 seconds before retrying (not 60 seconds).
+                        raise
+
                     except Exception as exc:
                         await db.rollback()
                         logger.error(
@@ -563,7 +568,12 @@ async def anomaly_worker() -> None:
         except asyncio.CancelledError:
             logger.info("[AnomalyEngine] Worker cancelled — shutting down.")
             break
+
+        except (ProgrammingError, OperationalError):
+            # Tables not ready. Wait 10 seconds and retry (not 60).
+            # The warning was already logged in the inner except block above.
+            await asyncio.sleep(10)
+
         except Exception as exc:
             logger.error("[AnomalyEngine] Outer loop error: %s", exc, exc_info=True)
-            # Brief pause before retrying to avoid tight error loops
             await asyncio.sleep(10)

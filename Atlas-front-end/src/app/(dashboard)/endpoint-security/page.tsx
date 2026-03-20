@@ -6,7 +6,7 @@ import {
   Info, LoaderCircle, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import {
-  BarChart, Bar, XAxis, YAxis,
+  BarChart, Bar, XAxis, YAxis, Label,
   Tooltip as RechartsTooltip, ResponsiveContainer, Cell, CartesianGrid,
 } from 'recharts';
 import { apiGet, apiPost, ApiError } from '@/lib/api';
@@ -54,9 +54,9 @@ SectionHeader.displayName = 'SectionHeader';
 const SeverityBadge = ({ severity }: { severity: string }) => {
   const map: Record<string, string> = {
     Critical: 'text-red-400 bg-red-500/10 border-red-500/40',
-    High: 'text-orange-400 bg-orange-500/10 border-orange-500/40',
-    Medium: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/40',
-    Low: 'text-blue-400 bg-blue-500/10 border-blue-500/40',
+    High:     'text-orange-400 bg-orange-500/10 border-orange-500/40',
+    Medium:   'text-yellow-400 bg-yellow-500/10 border-yellow-500/40',
+    Low:      'text-blue-400 bg-blue-500/10 border-blue-500/40',
   };
   return (
     <span
@@ -88,11 +88,29 @@ const CustomTooltipContent = ({ active, payload }: any) => {
   return null;
 };
 
-/**
- * Employee avatar — uses the URL the backend provides.
- * Falls back to deterministic initials + colour when URL is absent.
- * No placeholder-images.json is consulted.
- */
+// ── Task 2: Timestamp formatter ───────────────────────────────────────────────
+// Converts an ISO timestamp string into a compact, readable format.
+// Output example: "Mar 20, 14:32:05"
+// Returns "N/A" when the value is absent or unparseable.
+const formatTimestamp = (raw: string | undefined | null): string => {
+  if (!raw) return 'N/A';
+  const date = new Date(raw);
+  if (isNaN(date.getTime())) return 'N/A';
+
+  const datePart = date.toLocaleDateString('en-US', {
+    month: 'short',
+    day:   'numeric',
+  });
+  const timePart = date.toLocaleTimeString('en-US', {
+    hour:   '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  return `${datePart}, ${timePart}`;
+};
+
+// ── Employee avatar ───────────────────────────────────────────────────────────
 const EmployeeAvatar = ({ avatar, name }: { avatar: string; name: string }) => {
   if (isValidAvatarUrl(avatar)) {
     return (
@@ -100,9 +118,7 @@ const EmployeeAvatar = ({ avatar, name }: { avatar: string; name: string }) => {
         src={avatar}
         alt={name}
         className="w-8 h-8 rounded-full object-cover"
-        onError={(e) => {
-          (e.currentTarget as HTMLImageElement).style.display = 'none';
-        }}
+        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
       />
     );
   }
@@ -116,6 +132,7 @@ const EmployeeAvatar = ({ avatar, name }: { avatar: string; name: string }) => {
   );
 };
 
+// ── Event row ─────────────────────────────────────────────────────────────────
 const EventRow = ({
   ev,
   onQuarantine,
@@ -137,9 +154,11 @@ const EventRow = ({
           ev.severity === 'Critical' ? 'bg-red-950/20' : ''
         }`}
       >
-        <td className="px-5 py-4 text-xs text-slate-400 font-mono">
-          {ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : 'N/A'}
+        {/* ── Task 2: formatted timestamp ──────────────────────────────── */}
+        <td className="px-5 py-4 text-xs text-slate-400 font-mono whitespace-nowrap">
+          {formatTimestamp(ev.timestamp)}
         </td>
+
         <td className="px-5 py-4">
           <div className="flex items-center gap-2">
             <EmployeeAvatar avatar={ev.avatar || ''} name={ev.employee || '?'} />
@@ -149,6 +168,7 @@ const EventRow = ({
             </div>
           </div>
         </td>
+
         <td className="px-5 py-4">
           <div className="flex items-start gap-2">
             <AlertTriangle
@@ -159,31 +179,43 @@ const EventRow = ({
             <span>{ev.alert}</span>
           </div>
         </td>
+
         <td className="px-5 py-4">
           <SeverityBadge severity={ev.severity || 'Info'} />
         </td>
+
+        {/* ── Task 3: quarantine button with updated onClick + toast ─────── */}
         <td className="px-5 py-4 text-right">
-          <button
-            disabled={ev.severity !== 'Critical'}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (ev.severity === 'Critical') onQuarantine(ev.workstationId || '', ev.employee || '');
-            }}
-            className={`text-white text-xs font-bold px-3 py-1.5 rounded flex items-center gap-1.5 ${
-              ev.severity === 'Critical'
-                ? 'bg-red-600 hover:bg-red-700'
-                : 'bg-slate-700 cursor-not-allowed'
-            }`}
-          >
-            <Ban className="w-3 h-3" /> QUARANTINE
-          </button>
-          {expanded ? (
-            <ChevronUp className="w-3 h-3 inline ml-2" />
-          ) : (
-            <ChevronDown className="w-3 h-3 inline ml-2" />
-          )}
+          <div className="flex items-center justify-end gap-2">
+            <button
+              disabled={ev.severity !== 'Critical'}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (ev.severity === 'Critical') {
+                  onQuarantine(ev.workstationId || '', ev.employee || '');
+                }
+              }}
+              className={`text-white text-xs font-bold px-3 py-1.5 rounded flex items-center gap-1.5 transition-colors ${
+                ev.severity === 'Critical'
+                  ? 'bg-red-600 hover:bg-red-700 active:bg-red-800'
+                  : 'bg-slate-700 cursor-not-allowed opacity-50'
+              }`}
+              title={
+                ev.severity !== 'Critical'
+                  ? 'Quarantine is only available for Critical severity events'
+                  : `Isolate ${ev.workstationId} from the network`
+              }
+            >
+              <Ban className="w-3 h-3" /> QUARANTINE
+            </button>
+            {expanded
+              ? <ChevronUp className="w-3 h-3 text-slate-500" />
+              : <ChevronDown className="w-3 h-3 text-slate-500" />
+            }
+          </div>
         </td>
       </tr>
+
       {expanded && (
         <tr className="bg-slate-950 border-b border-slate-800">
           <td colSpan={5} className="p-4">
@@ -197,19 +229,18 @@ const EventRow = ({
   );
 };
 
-// ── Page ─────────────────────────────────────────────────────────────────────
+// ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function EndpointSecurityPage() {
   const { environment } = useEnvironment();
-  const [data, setData] = useState<EndpointSecurityData | null>(null);
+  const [data, setData]   = useState<EndpointSecurityData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError]   = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    // Endpoint matches backend route: GET /endpoint-security
     apiGet<EndpointSecurityData>('/endpoint-security', controller.signal)
       .then(setData)
       .catch((err) => {
@@ -222,17 +253,23 @@ export default function EndpointSecurityPage() {
     return () => controller.abort();
   }, [environment]);
 
+  // ── Task 3: quarantine handler ────────────────────────────────────────────
+  // The API call is unchanged; only the toast messages are updated to match
+  // the requested copy: "Endpoint [Name] has been isolated from the network."
   const handleQuarantine = async (workstationId: string, employee: string) => {
     if (!workstationId) {
       toast.error('Missing workstation ID');
       return;
     }
     try {
-      // Matches backend QuarantineRequest: { workstationId: string }
       await apiPost('/endpoint-security/quarantine', { workstationId });
-      toast.success('Device Quarantined', { description: `${workstationId} isolated` });
+      toast.success(`Endpoint ${workstationId} has been isolated from the network.`, {
+        description: employee
+          ? `User "${employee}" can no longer access network resources.`
+          : undefined,
+      });
     } catch (err) {
-      toast.error('Failed to Quarantine', {
+      toast.error(`Failed to quarantine ${workstationId}`, {
         description: err instanceof ApiError ? err.message : 'Could not connect to EDR',
       });
     }
@@ -244,9 +281,9 @@ export default function EndpointSecurityPage() {
   } = useMemo(() => {
     const epData = data || {};
     return {
-      safeMonitored: Number(epData.monitoredLaptops) || 0,
-      safeOffline: Number(epData.offlineDevices) || 0,
-      safeMalwareAlerts: Number(epData.malwareAlerts) || 0,
+      safeMonitored:      Number(epData.monitoredLaptops)  || 0,
+      safeOffline:        Number(epData.offlineDevices)    || 0,
+      safeMalwareAlerts:  Number(epData.malwareAlerts)     || 0,
       osDistribution: (epData.osDistribution || []).map((d) => ({
         ...d, name: d.name || 'Unknown', value: Number(d.value) || 0,
       })),
@@ -257,9 +294,17 @@ export default function EndpointSecurityPage() {
     };
   }, [data]);
 
-  if (loading) return <div className="p-6 flex justify-center"><LoaderCircle className="w-6 h-6 animate-spin text-slate-500" /></div>;
+  if (loading) return (
+    <div className="p-6 flex justify-center">
+      <LoaderCircle className="w-6 h-6 animate-spin text-slate-500" />
+    </div>
+  );
   if (error) return <div className="text-red-400 p-6 text-center">{error}</div>;
-  if (!data) return <div className="flex items-center justify-center h-48 text-slate-500">No endpoint security data available.</div>;
+  if (!data)  return (
+    <div className="flex items-center justify-center h-48 text-slate-500">
+      No endpoint security data available.
+    </div>
+  );
 
   return (
     <div className="space-y-6 pb-8">
@@ -269,6 +314,7 @@ export default function EndpointSecurityPage() {
         </h1>
       </header>
 
+      {/* KPI cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
           <h3 className="text-sm text-slate-400">Monitored Laptops</h3>
@@ -284,7 +330,10 @@ export default function EndpointSecurityPage() {
         </div>
       </div>
 
+      {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+
+        {/* ── Task 1a: OS Distribution — axis labels added ───────────────── */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl">
           <SectionHeader
             icon={<Laptop className="w-4 h-4 text-blue-400" />}
@@ -293,13 +342,50 @@ export default function EndpointSecurityPage() {
             tooltipText="Overview of the OS landscape helps identify unpatched or legacy systems."
           />
           <div className="px-5 pb-5">
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={osDistribution}>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart
+                data={osDistribution}
+                // Extra bottom margin so the XAxis label doesn't overlap the ticks.
+                // Extra left margin so the rotated YAxis label has room.
+                margin={{ top: 5, right: 20, left: 10, bottom: 48 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <XAxis dataKey="name" tickFormatter={(v) => truncateLabel(v)} tick={{ fill: '#94a3b8', fontSize: 11 }} />
-                <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} />
-                <RechartsTooltip content={<CustomTooltipContent />} />
-                <Bar dataKey="value" name="Devices">
+
+                <XAxis
+                  dataKey="name"
+                  tickFormatter={(v) => truncateLabel(v)}
+                  tick={{ fill: '#94a3b8', fontSize: 11 }}
+                  tickLine={false}
+                  axisLine={{ stroke: '#334155' }}
+                  interval={0}
+                >
+                  {/* "Operating System" label sits below the axis ticks */}
+                  <Label
+                    value="Operating System"
+                    position="insideBottom"
+                    offset={-34}
+                    style={{ fill: '#f8f407', fontSize: 11 }}
+                  />
+                </XAxis>
+
+                <YAxis
+                  tick={{ fill: '#94a3b8', fontSize: 11 }}
+                  tickLine={false}
+                  axisLine={{ stroke: '#334155' }}
+                  width={55}
+                >
+                  {/* "Device Count" label rotated along the left edge */}
+                  <Label
+                    value="Device Count"
+                    angle={-90}
+                    position="insideLeft"
+                    offset={10}
+                    style={{ fill: '#f8f407', fontSize: 11, textAnchor: 'middle' }}
+                  />
+                </YAxis>
+
+                <RechartsTooltip content={<CustomTooltipContent />} cursor={{ fill: '#1e293b' }} />
+                <Bar dataKey="value" name="Devices" radius={[4, 4, 0, 0]}>
                   {osDistribution.map((e, i) => (
                     <Cell key={i} fill={e.fill || '#3b82f6'} />
                   ))}
@@ -309,6 +395,7 @@ export default function EndpointSecurityPage() {
           </div>
         </div>
 
+        {/* ── Task 1b: Alert Types — axis labels added ───────────────────── */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl">
           <SectionHeader
             icon={<AlertTriangle className="w-4 h-4 text-orange-400" />}
@@ -317,17 +404,52 @@ export default function EndpointSecurityPage() {
             tooltipText="Shows the most common threat categories across all monitored endpoints."
           />
           <div className="px-5 pb-5">
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart layout="vertical" data={alertTypes}>
-                <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart
+                layout="vertical"
+                data={alertTypes}
+                // Extra bottom margin for the XAxis label; extra left margin for
+                // the long category names on the YAxis.
+                margin={{ top: 5, right: 20, left: 10, bottom: 40 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
+
+                {/* Horizontal axis (numeric) sits at the bottom — label below it */}
+                <XAxis
+                  type="number"
+                  tick={{ fill: '#94a3b8', fontSize: 11 }}
+                  tickLine={false}
+                  axisLine={{ stroke: '#334155' }}
+                >
+                  <Label
+                    value="Alert Count"
+                    position="insideBottom"
+                    offset={-28}
+                    style={{ fill: '#f8f407', fontSize: 11 }}
+                  />
+                </XAxis>
+
+                {/* Vertical axis (category names) — label rotated on the left */}
                 <YAxis
                   dataKey="name"
                   type="category"
                   tickFormatter={(v) => truncateLabel(v, 15)}
                   tick={{ fill: '#94a3b8', fontSize: 11 }}
-                />
-                <RechartsTooltip content={<CustomTooltipContent />} />
-                <Bar dataKey="value" name="Count">
+                  tickLine={false}
+                  axisLine={{ stroke: '#334155' }}
+                  width={110}
+                >
+                  <Label
+                    value="Category"
+                    angle={-90}
+                    position="insideLeft"
+                    offset={10}
+                    style={{ fill: '#f8f407', fontSize: 11, textAnchor: 'middle' }}
+                  />
+                </YAxis>
+
+                <RechartsTooltip content={<CustomTooltipContent />} cursor={{ fill: '#1e293b' }} />
+                <Bar dataKey="value" name="Count" radius={[0, 4, 4, 0]}>
                   {alertTypes.map((e, i) => (
                     <Cell key={i} fill={e.fill || '#f97316'} />
                   ))}
@@ -338,6 +460,7 @@ export default function EndpointSecurityPage() {
         </div>
       </div>
 
+      {/* Endpoint event log */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
         <SectionHeader
           icon={<Activity className="w-4 h-4 text-red-400" />}

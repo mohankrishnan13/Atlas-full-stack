@@ -1,17 +1,26 @@
 /**
  * src/components/charts/DefensiveChart.tsx
- * 
+ *
  * Defensive chart components with built-in error handling, data coercion,
  * and proper responsive layout to prevent UI crashes.
+ *
+ * Fix applied: `colors` was referenced inside DefensiveLineChart but was only
+ * in scope as a prop inside DefensiveBarChart. Added a module-level fallback
+ * constant so both components can reference it without a ReferenceError.
  */
 
 import React from 'react';
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Cell, Legend
+  Tooltip, ResponsiveContainer, Cell, Legend,
 } from 'recharts';
 
-// --- Utility Functions ---
+// ── Module-level fallback palette ─────────────────────────────────────────────
+// Used by DefensiveLineChart when a line entry doesn't supply its own color.
+// DefensiveBarChart accepts this same array as a prop (with this as the default).
+const DEFAULT_COLORS = ['#3b82f6', '#ef4444', '#f97316', '#eab308', '#22c55e', '#a855f7'];
+
+// ── Utility functions ─────────────────────────────────────────────────────────
 
 const truncateLabel = (label: string | number | undefined, maxLength = 10): string => {
   if (typeof label !== 'string' && typeof label !== 'number') return '';
@@ -29,7 +38,23 @@ const coerceString = (value: any): string => {
   return String(value);
 };
 
-// --- Enhanced Tooltip with Defensive Parsing ---
+// ── Empty state ───────────────────────────────────────────────────────────────
+
+const EmptyChart = ({ height = 280 }: { height?: number }) => (
+  <div
+    className="flex items-center justify-center w-full text-slate-500 border border-slate-800 rounded-xl"
+    style={{ height }}
+  >
+    <div className="text-center">
+      <div className="w-8 h-8 mx-auto mb-2 rounded-full bg-slate-700 flex items-center justify-center">
+        <div className="w-4 h-0.5 bg-slate-400" />
+      </div>
+      No data available
+    </div>
+  </div>
+);
+
+// ── ChartTooltip ──────────────────────────────────────────────────────────────
 
 interface ChartTooltipProps {
   active?: boolean;
@@ -39,18 +64,17 @@ interface ChartTooltipProps {
   formatter?: (value: number) => string;
 }
 
-export const ChartTooltip: React.FC<ChartTooltipProps> = ({ 
-  active, 
-  payload, 
-  label, 
+export const ChartTooltip: React.FC<ChartTooltipProps> = ({
+  active,
+  payload,
+  label,
   fullLabels = {},
-  formatter = (v: number) => v.toLocaleString() 
+  formatter = (v: number) => v.toLocaleString(),
 }) => {
   if (!active || !payload || !payload.length) return null;
 
-  const data = payload[0]?.payload || {};
-  const dataKey = payload[0]?.dataKey || '';
-  const value = coerceNumber(payload[0]?.value);
+  const value     = coerceNumber(payload[0]?.value);
+  const dataKey   = payload[0]?.dataKey || '';
   const fullLabel = fullLabels[coerceString(label)] || coerceString(label);
 
   return (
@@ -60,14 +84,14 @@ export const ChartTooltip: React.FC<ChartTooltipProps> = ({
       </p>
       {payload.map((pld: any, index: number) => (
         <p key={index} className="text-slate-300 mt-1" style={{ color: pld.color || '#94a3b8' }}>
-          {`${pld.name || dataKey}: ${formatter(value)}`}
+          {`${pld.name || dataKey}: ${formatter(coerceNumber(pld.value))}`}
         </p>
       ))}
     </div>
   );
 };
 
-// --- Defensive Bar Chart Component ---
+// ── DefensiveBarChart ─────────────────────────────────────────────────────────
 
 interface DefensiveBarChartProps {
   data: any[];
@@ -88,33 +112,24 @@ export const DefensiveBarChart: React.FC<DefensiveBarChartProps> = ({
   dataKey,
   height = 280,
   margin = { top: 5, right: 20, left: 10, bottom: 30 },
-  colors = ['#3b82f6', '#ef4444', '#f97316', '#eab308'],
+  colors = DEFAULT_COLORS,
   showGrid = true,
   showTooltip = true,
   xAxisProps = {},
   yAxisProps = {},
   fullLabels = {},
-  radius = [4, 4, 0, 0]
+  radius = [4, 4, 0, 0],
 }) => {
-  // Defensive data processing
-  const safeData = Array.isArray(data) ? data.filter(item => item && typeof item === 'object') : [];
-  const processedData = safeData.map(item => ({
+  const safeData = Array.isArray(data)
+    ? data.filter((item) => item && typeof item === 'object')
+    : [];
+
+  const processedData = safeData.map((item) => ({
     ...item,
-    [dataKey]: coerceNumber(item[dataKey])
+    [dataKey]: coerceNumber(item[dataKey]),
   }));
 
-  if (processedData.length === 0) {
-    return (
-      <div className="flex items-center justify-center w-full h-[280px] text-slate-500 border border-slate-800 rounded-xl">
-        <div className="text-center">
-          <div className="w-8 h-8 mx-auto mb-2 rounded-full bg-slate-700 flex items-center justify-center">
-            <div className="w-4 h-0.5 bg-slate-400"></div>
-          </div>
-          No data available
-        </div>
-      </div>
-    );
-  }
+  if (processedData.length === 0) return <EmptyChart height={height} />;
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -138,13 +153,15 @@ export const DefensiveBarChart: React.FC<DefensiveBarChartProps> = ({
           width={80}
           {...yAxisProps}
         />
-        {showTooltip && <Tooltip content={<ChartTooltip fullLabels={fullLabels} />} cursor={{ fill: '#1e293b' }} />}
+        {showTooltip && (
+          <Tooltip
+            content={<ChartTooltip fullLabels={fullLabels} />}
+            cursor={{ fill: '#1e293b' }}
+          />
+        )}
         <Bar dataKey={dataKey} radius={radius}>
-          {processedData.map((entry, index) => (
-            <Cell 
-              key={`cell-${index}`} 
-              fill={colors[index % colors.length]} 
-            />
+          {processedData.map((_, index) => (
+            <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />
           ))}
         </Bar>
       </BarChart>
@@ -152,7 +169,7 @@ export const DefensiveBarChart: React.FC<DefensiveBarChartProps> = ({
   );
 };
 
-// --- Defensive Line Chart Component ---
+// ── DefensiveLineChart ────────────────────────────────────────────────────────
 
 interface DefensiveLineChartProps {
   data: any[];
@@ -175,30 +192,21 @@ export const DefensiveLineChart: React.FC<DefensiveLineChartProps> = ({
   showTooltip = true,
   xAxisProps = {},
   yAxisProps = {},
-  fullLabels = {}
+  fullLabels = {},
 }) => {
-  // Defensive data processing
-  const safeData = Array.isArray(data) ? data.filter(item => item && typeof item === 'object') : [];
-  const processedData = safeData.map(item => {
+  const safeData = Array.isArray(data)
+    ? data.filter((item) => item && typeof item === 'object')
+    : [];
+
+  const processedData = safeData.map((item) => {
     const processed: any = { ...item };
-    lines.forEach(line => {
+    lines.forEach((line) => {
       processed[line.dataKey] = coerceNumber(item[line.dataKey]);
     });
     return processed;
   });
 
-  if (processedData.length === 0) {
-    return (
-      <div className="flex items-center justify-center w-full h-[280px] text-slate-500 border border-slate-800 rounded-xl">
-        <div className="text-center">
-          <div className="w-8 h-8 mx-auto mb-2 rounded-full bg-slate-700 flex items-center justify-center">
-            <div className="w-4 h-0.5 bg-slate-400"></div>
-          </div>
-          No data available
-        </div>
-      </div>
-    );
-  }
+  if (processedData.length === 0) return <EmptyChart height={height} />;
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -222,13 +230,19 @@ export const DefensiveLineChart: React.FC<DefensiveLineChartProps> = ({
           width={80}
           {...yAxisProps}
         />
-        {showTooltip && <Tooltip content={<ChartTooltip fullLabels={fullLabels} />} cursor={{ fill: '#1e293b' }} />}
+        {showTooltip && (
+          <Tooltip
+            content={<ChartTooltip fullLabels={fullLabels} />}
+            cursor={{ fill: '#1e293b' }}
+          />
+        )}
         {lines.map((line, index) => (
           <Line
             key={line.dataKey}
             type="monotone"
             dataKey={line.dataKey}
-            stroke={line.color || colors[index % colors.length]}
+            // ── Fix: use module-level DEFAULT_COLORS, not the out-of-scope `colors` prop ──
+            stroke={line.color || DEFAULT_COLORS[index % DEFAULT_COLORS.length]}
             strokeWidth={2}
             dot={{ r: 4 }}
             activeDot={{ r: 6 }}
@@ -240,7 +254,7 @@ export const DefensiveLineChart: React.FC<DefensiveLineChartProps> = ({
   );
 };
 
-// --- Info Tooltip Component ---
+// ── ChartInfoTooltip ──────────────────────────────────────────────────────────
 
 interface InfoTooltipProps {
   text: string;
@@ -249,20 +263,20 @@ interface InfoTooltipProps {
 
 export const ChartInfoTooltip: React.FC<InfoTooltipProps> = ({ text, className = '' }) => {
   const [open, setOpen] = React.useState(false);
-  
+
   return (
     <div className={`relative inline-flex items-center ml-1 ${className}`}>
-      <button 
-        onMouseEnter={() => setOpen(true)} 
-        onMouseLeave={() => setOpen(false)} 
-        onFocus={() => setOpen(true)} 
-        onBlur={() => setOpen(false)} 
-        className="text-slate-500 hover:text-blue-400 transition-colors" 
+      <button
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        className="text-slate-500 hover:text-blue-400 transition-colors"
         aria-label="More information"
       >
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <circle cx="12" cy="12" r="10" strokeWidth="2"/>
-          <path d="M12 16v-4M12 8h.01" strokeWidth="2" strokeLinecap="round"/>
+          <circle cx="12" cy="12" r="10" strokeWidth="2" />
+          <path d="M12 16v-4M12 8h.01" strokeWidth="2" strokeLinecap="round" />
         </svg>
       </button>
       {open && (

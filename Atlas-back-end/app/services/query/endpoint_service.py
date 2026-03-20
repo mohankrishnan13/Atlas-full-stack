@@ -249,7 +249,11 @@ def _build_wazuh_events(rows: list[dict], limit: int = 10) -> list[WazuhEvent]:
             avatar=row["avatar"],
             alert=row["alert_message"],
             severity=row["severity"],
-            timestamp=row.get("timestamp"),
+            timestamp=(row["timestamp"].isoformat()
+                        if isinstance(row["timestamp"], datetime)
+                        else row.get("timestamp")
+                        if row.get("timestamp")
+                        else None),
         )
         for i, row in enumerate(rows_sorted[:limit])
     ]
@@ -290,7 +294,7 @@ def _pad_with_keepalives(
                 avatar="",
                 alert="Agent heartbeat received. Endpoint is secure.",
                 severity="Info",
-                timestamp=None,
+                timestamp=datetime.now(timezone.utc).isoformat(),
             )
         )
 
