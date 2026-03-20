@@ -48,7 +48,7 @@ export default function LoginPage() {
             if (typeof window !== 'undefined') {
                 localStorage.setItem('atlas_auth_token', result.access_token);
             }
-            router.push('/overview');
+            router.push('/api-monitoring');
         } else if (response.status === 401) {
             setApiError('Invalid credentials. Please try again.');
         } else {

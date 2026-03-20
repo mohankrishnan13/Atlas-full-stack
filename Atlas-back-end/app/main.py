@@ -2,33 +2,37 @@
 main.py — ATLAS FastAPI Application
 
 Startup sequence (lifespan):
-  1. seed_default_admin()         — Safely attempts to seed admin (skips if tables missing/exist)
-  2. seed_applications_config()   — Safely attempts to seed Apps/Microservices
-  3. start_wazuh_sync()           — Background Wazuh poll task (runs every 1 minute)
+  1. seed_default_admin()         — Seeds admin accounts (idempotent)
+  2. seed_applications_config()   — Seeds Apps / Microservices (idempotent)
+  3. _start_wazuh_sync()          — Background Wazuh poll task (every 60s)
+  4. anomaly_worker()             — NEW: Background anomaly detection (every 60s)
 
-Note: Table creation is now handled strictly by Alembic migrations externally.
+Note: Table creation is handled strictly by Alembic migrations externally.
 """
 
 import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text, select
+from sqlalchemy import text, select, desc
 from sqlalchemy.exc import IntegrityError, ProgrammingError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.database import AsyncSessionLocal, close_db
-from app.services.auth_service import seed_default_admin
+from app.core.database import AsyncSessionLocal, close_db, get_db
+from app.services.auth_service import seed_default_admin, get_current_user
 from app.services.wazuh_service import WazuhCollector
-from app.models.db_models import Application, AppConfig, Microservice
+from app.services.anomaly_engine import anomaly_worker          # NEW
+from app.models.db_models import Application, AppConfig, Microservice, AnomalyEvent, AtlasUser
 
 from app.api.routes_auth import router as auth_router
 from app.api.routes_dashboard import router as dashboard_router
 from app.api.routes_settings import router as settings_router
 from app.api.routes_actions import router as actions_router
+from app.api.routes_simulation import router as simulation_router   # NEW
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,18 +42,15 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
+
 async def _seed_applications_config() -> None:
-    """
-    Seeds Applications, Microservices, and AppConfigs for every env.
-    Idempotent — safely handles race conditions in multi-worker environments.
-    """
+    """Seeds Applications, Microservices, and AppConfigs. Idempotent."""
     _APPS = [
         ("all",      "All Applications"),
         ("naukri",   "Naukri"),
         ("genai",    "GenAI"),
         ("flipkart", "Flipkart"),
     ]
-
     _MICROSERVICES = [
         ("api",           "API-Gateway",          "Healthy", "40%", "75%", "auth,payment,notifications"),
         ("auth",          "Auth-Service",         "Healthy", "20%", "25%", "api"),
@@ -73,7 +74,7 @@ async def _seed_applications_config() -> None:
                 has_ms = (await db.execute(
                     select(Microservice).where(Microservice.env == env).limit(1)
                 )).scalar_one_or_none()
-                
+
                 if not has_ms:
                     for sid, name, status, top, left, conns in _MICROSERVICES:
                         db.add(Microservice(
@@ -95,18 +96,16 @@ async def _seed_applications_config() -> None:
                         db.add(AppConfig(env=env, app_id=app_id))
 
             await db.commit()
-
         except (IntegrityError, ProgrammingError):
             await db.rollback()
-            logger.info("Application config seed skipped: Data already exists or tables not ready.")
+            logger.info("Application config seed skipped.")
         except Exception as e:
             await db.rollback()
-            logger.error(f"Unexpected error during application config seed: {e}")
+            logger.error("Unexpected error during app config seed: %s", e)
+
 
 async def _start_wazuh_sync() -> None:
-    """
-    Background coroutine that polls Wazuh every minute for new alerts.
-    """
+    """Background coroutine: polls Wazuh every minute for new alerts."""
     collector = WazuhCollector()
     while True:
         try:
@@ -115,44 +114,44 @@ async def _start_wazuh_sync() -> None:
                 await collector.sync_alerts(db)
             logger.info("[WazuhSync] Sync complete.")
         except asyncio.CancelledError:
-            logger.info("[WazuhSync] Background task cancelled — shutting down.")
+            logger.info("[WazuhSync] Cancelled — shutting down.")
             break
         except Exception as exc:
-            logger.error("[WazuhSync] Error during sync: %s", exc, exc_info=True)
-
+            logger.error("[WazuhSync] Error: %s", exc, exc_info=True)
         await asyncio.sleep(60)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info(f"Starting {settings.app_name} (env: {settings.app_env}) ...")
-    
-    # Database tables are now created by init_db.py before Uvicorn starts
-    # This eliminates race conditions and UndefinedTableError issues
-    
+    logger.info("Starting %s (env: %s) ...", settings.app_name, settings.app_env)
+
     try:
         await seed_default_admin()
         await _seed_applications_config()
     except (IntegrityError, ProgrammingError):
-        logger.warning("Database not ready. Skipping initial data seeding.")
+        logger.warning("Database not ready — skipping seed.")
 
     wazuh_task = asyncio.create_task(_start_wazuh_sync())
-    logger.info(f"{settings.app_name} startup complete. Wazuh sync active.")
+    engine_task = asyncio.create_task(anomaly_worker())      # NEW
+    logger.info("%s startup complete. Wazuh sync + Anomaly Engine active.", settings.app_name)
 
     yield
 
     logger.info("Shutting down ATLAS ...")
-    wazuh_task.cancel()
-    try:
-        await wazuh_task
-    except asyncio.CancelledError:
-        pass
+    for task in (wazuh_task, engine_task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     await close_db()
-    logger.info("Database connection pool closed. Shutdown complete.")
+    logger.info("Shutdown complete.")
+
 
 app = FastAPI(
     title="ATLAS — Advanced Traffic Layer Anomaly System",
-    description="Enterprise SOC Dashboard backend powered by FastAPI + PostgreSQL.",
-    version="2.0.0",
+    description="Enterprise SOC Dashboard backend powered by FastAPI + PostgreSQL + Gemini AI.",
+    version="3.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -170,10 +169,81 @@ app.include_router(auth_router)
 app.include_router(dashboard_router)
 app.include_router(settings_router)
 app.include_router(actions_router)
+app.include_router(simulation_router)    # NEW
+
+
+# ── AnomalyEvent REST endpoints ───────────────────────────────────────────────
+
+@app.get(
+    "/anomalies",
+    tags=["Anomaly Engine"],
+    summary="List recent AI-detected anomalies",
+)
+async def list_anomalies(
+    limit: int = 50,
+    status: str = "",
+    db: AsyncSession = Depends(get_db),
+    current_user: AtlasUser = Depends(get_current_user),
+):
+    """
+    Returns the most recent AnomalyEvent records for the current user's environment.
+    Optionally filter by status (Active / Acknowledged / Resolved).
+    """
+    q = select(AnomalyEvent).where(AnomalyEvent.env == current_user.env)
+    if status:
+        q = q.where(AnomalyEvent.status == status)
+    q = q.order_by(desc(AnomalyEvent.detected_at)).limit(limit)
+    result = await db.execute(q)
+    rows = result.scalars().all()
+    return [
+        {
+            "id": r.id,
+            "anomalyType": r.anomaly_type,
+            "severity": r.severity,
+            "targetApp": r.target_app,
+            "sourceIp": r.source_ip,
+            "endpoint": r.endpoint,
+            "description": r.description,
+            "metricsSnapshot": r.metrics_snapshot,
+            "aiExplanation": r.ai_explanation,
+            "status": r.status,
+            "detectedAt": r.detected_at.isoformat() if r.detected_at else None,
+            "resolvedAt": r.resolved_at.isoformat() if r.resolved_at else None,
+        }
+        for r in rows
+    ]
+
+
+@app.patch(
+    "/anomalies/{anomaly_id}/acknowledge",
+    tags=["Anomaly Engine"],
+    summary="Acknowledge an anomaly (Active → Acknowledged)",
+)
+async def acknowledge_anomaly(
+    anomaly_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: AtlasUser = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(AnomalyEvent).where(
+            AnomalyEvent.id == anomaly_id,
+            AnomalyEvent.env == current_user.env,
+        )
+    )
+    event = result.scalar_one_or_none()
+    if not event:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Anomaly not found.")
+    event.status = "Acknowledged"
+    await db.commit()
+    return {"success": True, "id": anomaly_id, "status": "Acknowledged"}
+
+
+# ── Global exception handler ──────────────────────────────────────────────────
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc: Exception):
-    logger.error(f"Unhandled exception on {request.url}: {exc}", exc_info=True)
+    logger.error("Unhandled exception on %s: %s", request.url, exc, exc_info=True)
     return JSONResponse(
         status_code=500,
         content={
@@ -182,14 +252,16 @@ async def global_exception_handler(request, exc: Exception):
         },
     )
 
+
 @app.get("/", tags=["Health"])
 async def root():
     return {
         "service": settings.app_name,
-        "version": "2.0.0",
-        "stack": "FastAPI + PostgreSQL",
+        "version": "3.0.0",
+        "stack": "FastAPI + PostgreSQL + Gemini AI",
         "environment": settings.app_env,
     }
+
 
 @app.get("/health", tags=["Health"])
 async def health():
@@ -200,7 +272,6 @@ async def health():
             db_status = "connected"
     except Exception as exc:
         db_status = f"error: {exc}"
-
     return {
         "status": "healthy" if db_status == "connected" else "degraded",
         "database": db_status,

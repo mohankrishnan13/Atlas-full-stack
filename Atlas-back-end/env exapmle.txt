@@ -1,0 +1,210 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# ATLAS SOC Dashboard — Environment Configuration Template
+#
+# 1. Copy this file:   cp .env.example .env
+# 2. Fill in every line marked [REQUIRED].
+# 3. NEVER commit .env to version control — it's already in .gitignore.
+#
+# Legend
+# ──────
+#   [REQUIRED]  App will refuse to start without a real value.
+#   [OPTIONAL]  A safe default exists; override only when needed.
+#   [GENERATE]  Must be generated — do not invent a value manually.
+#
+# One-shot secret generation (run in your terminal):
+#   python -c "
+#   import secrets
+#   print('SECRET_KEY='        + secrets.token_hex(32))
+#   print('INGEST_API_KEY='    + secrets.token_urlsafe(48))
+#   "
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 🧩 APPLICATION
+# ──────────────────────────────────────────────────────────────────────────────
+
+# [OPTIONAL] Human-readable service name shown in logs and the /health endpoint.
+APP_NAME=ATLAS
+
+# [OPTIONAL] Runtime environment label — controls log verbosity and error detail.
+#   Allowed: development | staging | production
+APP_ENV=development
+
+# [OPTIONAL] Full exception detail in HTTP 500 responses.
+#            Always set to false in production.
+DEBUG=true
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 🗄️ DATABASE CONFIG (STRUCTURE)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# [REQUIRED] Async SQLAlchemy URL — consumed by all FastAPI route handlers.
+#   Format:  postgresql+asyncpg://<user>:<password>@<host>:<port>/<database>
+DATABASE_URL=postgresql+asyncpg://atlas_user:${POSTGRES_PASSWORD}@postgres:5432/atlas_db
+
+# [OPTIONAL] Sync URL — consumed only by Alembic CLI migrations, not at runtime.
+DATABASE_URL_SYNC=postgresql+psycopg2://atlas_user:${POSTGRES_PASSWORD}@postgres:5432/atlas_db
+
+# [OPTIONAL] Connection pool tuning — safe defaults suit most deployments.
+DB_POOL_SIZE=10
+DB_MAX_OVERFLOW=20
+DB_POOL_TIMEOUT=30
+
+# [OPTIONAL] Log every SQL statement to stdout — enable only for deep debugging.
+DB_ECHO_SQL=false
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 🔐 CENTRALIZED CREDENTIALS & SECRETS
+# ──────────────────────────────────────────────────────────────────────────────
+
+# [REQUIRED] [GENERATE] Secret used to sign and verify all JWT access tokens.
+SECRET_KEY=REPLACE_WITH_GENERATED_TOKEN_HEX_32
+
+# [REQUIRED] [GENERATE] Static API key for log ingestion.
+INGEST_API_KEY=REPLACE_WITH_GENERATED_TOKEN_URLSAFE_48
+
+# [REQUIRED] PostgreSQL credentials (must match DATABASE_URL).
+POSTGRES_USER=atlas_user
+POSTGRES_PASSWORD=REPLACE_WITH_STRONG_PASSWORD
+
+# [REQUIRED] Seed account passwords.
+SEED_ADMIN_PASSWORD=REPLACE_WITH_STRONG_UNIQUE_PASSWORD
+SEED_ANALYST_PASSWORD=REPLACE_WITH_STRONG_UNIQUE_PASSWORD
+SEED_READONLY_PASSWORD=REPLACE_WITH_STRONG_UNIQUE_PASSWORD
+
+# [REQUIRED] Wazuh API credentials.
+WAZUH_USERNAME=wazuh-wui
+WAZUH_PASSWORD=REPLACE_WITH_WAZUH_API_PASSWORD
+
+# [REQUIRED] Wazuh Indexer credentials.
+WAZUH_INDEXER_USERNAME=admin
+WAZUH_INDEXER_PASSWORD=REPLACE_WITH_WAZUH_INDEXER_PASSWORD
+
+# [OPTIONAL] AWS credentials (leave blank if using IAM role).
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+
+# [OPTIONAL] Gemini API key.
+GEMINI_API_KEY=REPLACE_WITH_YOUR_GEMINI_API_KEY
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 🌐 SERVICE ENDPOINTS
+# ──────────────────────────────────────────────────────────────────────────────
+
+# [REQUIRED] Full base URL of the Wazuh Manager REST API.
+WAZUH_API_URL=https://REPLACE_WITH_WAZUH_MANAGER_IP:55000
+
+# [REQUIRED] Full base URL of the Wazuh Indexer REST API.
+WAZUH_INDEXER_URL=https://REPLACE_WITH_WAZUH_INDEXER_IP:9200
+
+# [OPTIONAL] URL of your local Ollama instance.
+OLLAMA_BASE_URL=http://localhost:11434
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 👤 SEED / BOOTSTRAP ACCOUNTS
+# ──────────────────────────────────────────────────────────────────────────────
+
+# [OPTIONAL] Login email for each seeded account.
+SEED_ADMIN_EMAIL=admin@atlas.local
+SEED_ANALYST_EMAIL=analyst@atlas.local
+SEED_READONLY_EMAIL=audit@atlas.local
+
+# [OPTIONAL] Display name for each seeded account.
+SEED_ADMIN_NAME=ATLAS Administrator
+SEED_ANALYST_NAME=SOC Analyst
+SEED_READONLY_NAME=External Auditor
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 🔐 AUTH SETTINGS
+# ──────────────────────────────────────────────────────────────────────────────
+
+# [OPTIONAL] JWT signing algorithm — HS256 is the standard.
+ALGORITHM=HS256
+
+# [OPTIONAL] JWT lifetime in minutes.
+ACCESS_TOKEN_EXPIRE_MINUTES=60
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 📡 INGEST SETTINGS
+# ──────────────────────────────────────────────────────────────────────────────
+
+# [OPTIONAL] HTTP request header name that agents must include the key in.
+INGEST_API_KEY_HEADER=X-Atlas-API-Key
+
+# [OPTIONAL] Maximum number of log events accepted in a single POST request.
+INGEST_MAX_BATCH_SIZE=5000
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 🔒 SSL SETTINGS
+# ──────────────────────────────────────────────────────────────────────────────
+
+# [OPTIONAL] Enable TLS certificate verification for Wazuh Manager connections.
+WAZUH_VERIFY_SSL=false
+WAZUH_CA_BUNDLE=
+
+# [OPTIONAL] Enable TLS certificate verification for Indexer connections.
+WAZUH_INDEXER_VERIFY_SSL=false
+WAZUH_INDEXER_CA_BUNDLE=
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 🌍 CORS
+# ──────────────────────────────────────────────────────────────────────────────
+
+# [OPTIONAL] Comma-separated list of allowed frontend origins.
+ALLOWED_CORS_ORIGINS=http://localhost:3000
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 🤖 AI / LLM
+# ──────────────────────────────────────────────────────────────────────────────
+
+# [OPTIONAL] Ollama model to use.
+OLLAMA_MODEL=llama3
+
+# [OPTIONAL] Gemini model.
+GEMINI_MODEL=gemini-1.5-flash
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ⚠️ RISK & ANOMALY THRESHOLDS
+# ──────────────────────────────────────────────────────────────────────────────
+
+RISK_WARN_THRESHOLD=1
+RISK_SOFT_LIMIT_THRESHOLD=3
+RISK_HARD_BLOCK_THRESHOLD=5
+ANOMALY_SCORE_THRESHOLD=-0.1
+
+ANOMALY_BASELINE_CALLS=200
+ANOMALY_NETWORK_SPIKE_BYTES=524288000
+ANOMALY_DEDUP_WINDOW_MINUTES=10
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ☁️ AWS S3 CONFIG
+# ──────────────────────────────────────────────────────────────────────────────
+
+S3_ENABLED=false
+AWS_REGION=us-east-1
+
+S3_LOG_BUCKET=atlas-soc-cold-logs
+S3_LOG_PREFIX=logs/
+
+S3_POLL_INTERVAL_SECONDS=300
+S3_MAX_KEYS_PER_POLL=50
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 📂 LOG STORAGE
+# ──────────────────────────────────────────────────────────────────────────────
+
+# [OPTIONAL] Path to log files and datasets.
+LOG_DATA_DIR=data/logs

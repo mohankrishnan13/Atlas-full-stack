@@ -4,22 +4,31 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  Shield, LayoutDashboard, Activity, Network,
-  Laptop, Database, AlertTriangle, FileText, Settings,
-  ChevronLeft, ChevronRight,
+  Shield,
+  Activity,
+  Network,
+  Laptop,
+  AlertTriangle,
+  FileText,
+  Settings,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-// All dashboard routes — Database Monitoring is fully enabled (was previously commented out)
+/**
+ * Sidebar navigation.
+ * Overview and Database Monitoring have been removed per the v3 design.
+ * The active tabs are: API Monitoring, Network Traffic, Endpoint Security,
+ * Case Management, Reports, Settings.
+ */
 const navItems = [
-  { icon: LayoutDashboard, label: 'Overview',              href: '/overview' },
-  { icon: Activity,        label: 'API Monitoring',        href: '/api-monitoring' },
-  { icon: Network,         label: 'Network Traffic',       href: '/network-traffic' },
-  { icon: Laptop,          label: 'Endpoint Security',     href: '/endpoint-security' },
-  { icon: Database,        label: 'Database Monitoring',   href: '/database-monitoring' },
-  { icon: AlertTriangle,   label: 'Case Management',       href: '/incidents' },
-  { icon: FileText,        label: 'Reports',               href: '/reports' },
-  { icon: Settings,        label: 'Settings',              href: '/settings' },
+  { icon: Activity,      label: 'API Monitoring',    href: '/api-monitoring' },
+  { icon: Network,       label: 'Network Traffic',   href: '/network-traffic' },
+  { icon: Laptop,        label: 'Endpoint Security', href: '/endpoint-security' },
+  { icon: AlertTriangle, label: 'Case Management',   href: '/incidents' },
+  { icon: FileText,      label: 'Reports',           href: '/reports' },
+  { icon: Settings,      label: 'Settings',          href: '/settings' },
 ];
 
 export function DashboardSidebar() {
@@ -30,18 +39,19 @@ export function DashboardSidebar() {
     <aside
       className={cn(
         'bg-slate-900 border-r border-slate-800 transition-all duration-300 flex flex-col flex-shrink-0',
-        collapsed ? 'w-20' : 'w-[260px]',
+        collapsed ? 'w-20' : 'w-[240px]',
       )}
     >
-      <div className="h-16 flex items-center justify-between px-4 border-b border-slate-800">
+      {/* Logo */}
+      <div className="h-16 flex items-center px-4 border-b border-slate-800">
         {!collapsed ? (
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-blue-500/20 rounded-lg flex items-center justify-center">
+            <div className="w-8 h-8 bg-blue-500/20 rounded-lg flex items-center justify-center flex-shrink-0">
               <Shield className="w-5 h-5 text-blue-400" />
             </div>
             <div>
               <div className="text-base font-bold text-slate-50">ATLAS</div>
-              <div className="text-[10px] text-slate-500 -mt-0.5">Anomaly System</div>
+              <div className="text-[10px] text-slate-500 -mt-0.5">Anomaly System v3</div>
             </div>
           </div>
         ) : (
@@ -51,7 +61,8 @@ export function DashboardSidebar() {
         )}
       </div>
 
-      <nav className="flex-1 py-4 px-2">
+      {/* Navigation */}
+      <nav className="flex-1 py-4 px-2 overflow-y-auto">
         {navItems.map((item) => {
           const isActive = pathname.startsWith(item.href);
           return (
@@ -59,7 +70,7 @@ export function DashboardSidebar() {
               key={item.href}
               href={item.href}
               className={cn(
-                'flex items-center gap-3 px-3 py-2.5 mb-1 rounded-lg transition-all relative',
+                'flex items-center gap-3 px-3 py-2.5 mb-1 rounded-lg transition-all relative group',
                 isActive
                   ? 'bg-blue-500/10 text-blue-400'
                   : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200',
@@ -69,12 +80,21 @@ export function DashboardSidebar() {
                 <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-blue-500 rounded-r" />
               )}
               <item.icon className="w-5 h-5 flex-shrink-0" />
-              {!collapsed && <span className="text-sm">{item.label}</span>}
+              {!collapsed && (
+                <span className="text-sm font-medium">{item.label}</span>
+              )}
+              {/* Tooltip when collapsed */}
+              {collapsed && (
+                <div className="absolute left-full ml-3 px-2 py-1 bg-slate-800 text-slate-200 text-xs rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 border border-slate-700">
+                  {item.label}
+                </div>
+              )}
             </Link>
           );
         })}
       </nav>
 
+      {/* Collapse Toggle */}
       <div className="p-2 border-t border-slate-800">
         <button
           onClick={() => setCollapsed(!collapsed)}

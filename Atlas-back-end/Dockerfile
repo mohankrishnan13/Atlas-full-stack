@@ -1,67 +1,70 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # ATLAS SOC Dashboard — Dockerfile
 # Multi-stage build: builder installs deps, runtime keeps the image lean.
-# Target runtime: Python 3.12-slim (matches app/__pycache__/cpython-312 bytecode)
+# Python 3.12-slim
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ── Stage 1: Dependency builder ─────────────────────────────────────────────────
+# ── Stage 1: Build ─────────────────────────────────────────────
 FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-# System packages needed to compile native extensions
-#   libpq-dev  — psycopg2-binary / asyncpg
-#   gcc        — C extensions in cryptography / bcrypt
+ENV PIP_NO_CACHE_DIR=1
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc \
-        libpq-dev \
+    gcc \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python packages into an isolated prefix so they can be copied cleanly
 COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+RUN pip install --upgrade pip \
+ && pip install --prefix=/install --no-cache-dir -r requirements.txt
+
+RUN find /install -type d -name "__pycache__" -exec rm -r {} +
 
 
-# ── Stage 2: Production runtime ─────────────────────────────────────────────────
+# ── Stage 2: Runtime ───────────────────────────────────────────
 FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
-# Runtime system libraries only (no compiler toolchain)
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libpq5 \
-        curl \
+    libpq5 \
+    postgresql-client \
+    tini \
     && rm -rf /var/lib/apt/lists/*
 
-# Pull installed Python packages from builder
 COPY --from=builder /install /usr/local
 
-# Create a least-privilege user before copying application code
+# Create non-root user
 RUN groupadd --system atlas \
- && useradd  --system --gid atlas --no-create-home atlas
+ && useradd --system --gid atlas --no-create-home atlas
 
-# Copy application source
-COPY --chown=atlas:atlas . .
+# Copy app
+COPY --chown=atlas:atlas app ./app
+COPY --chown=atlas:atlas config ./config
+COPY --chown=atlas:atlas alembic.ini .
+COPY --chown=atlas:atlas alembic ./alembic
 
-# Create data directory for log files (LOG_DATA_DIR=data/logs)
-RUN mkdir -p data/logs && chown -R atlas:atlas data/
+# Create runtime dirs safely
+RUN install -d -o atlas -g atlas data/logs
 
-# Drop to non-root for the rest of the container's lifetime
+# Sanity check
+RUN python -c "import app"
+
 USER atlas
 
-# Expose the Uvicorn port (matches CMD below and docker-compose port mapping)
 EXPOSE 8000
 
-# Health-check: matches the /health endpoint in app/main.py
+# Healthcheck (no curl needed)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
-# ── Entrypoint ──────────────────────────────────────────────────────────────────
-# Workers: 1 is safe for development.
-# Production: set --workers $(nproc) or use gunicorn -k uvicorn.workers.UvicornWorker
-CMD ["uvicorn", "app.main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--workers", "1", \
-     "--log-level", "info", \
-     "--access-log"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2}"]

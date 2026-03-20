@@ -14,69 +14,66 @@
 # Final image: ~200 MB vs the full node image at ~900 MB.
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ── Stage 1: Install dependencies ─────────────────────────────────────────────
-FROM node:20-alpine AS deps
-
-# libc6-compat is required for some native Node.js bindings on Alpine
-RUN apk add --no-cache libc6-compat
+# ── Stage 1: Install dependencies ──────────────────────────────
+FROM node:20.11-slim AS deps
 
 WORKDIR /app
 
-# Copy manifest files first so Docker can cache the install layer.
-# This layer is only rebuilt when package.json or package-lock.json changes.
+# Install dependencies (cached layer)
 COPY package.json package-lock.json* ./
-
-# Install ALL dependencies — devDependencies are required for `next build`
-# (TypeScript compilation, ESLint, etc.) and are NOT included in the final image.
 RUN npm ci
 
-# ── Stage 2: Build ─────────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+
+# ── Stage 2: Build ─────────────────────────────────────────────
+FROM node:20.11-slim AS builder
 
 WORKDIR /app
 
-# ── Build argument: backend URL ───────────────────────────────────────────────
-# Passed by Docker Compose (or CI) via the `args:` block.
-# NEXT_PUBLIC_ prefix means this value is inlined into client JS bundles
-# at build time — it cannot be changed at container runtime.
-# Default: localhost:8000 for local dev without Compose.
-ARG NEXT_PUBLIC_ATLAS_BACKEND_URL=http://localhost:8000
-ENV NEXT_PUBLIC_ATLAS_BACKEND_URL=$NEXT_PUBLIC_ATLAS_BACKEND_URL
-
-# Disable Next.js telemetry during build
+# Disable telemetry
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Copy installed node_modules from the deps stage
+# If you STILL want build-time API URL, keep this.
+# Otherwise, remove and rely on Nginx (/api proxy)
+ARG NEXT_PUBLIC_ATLAS_BACKEND_URL=http://atlas-backend:8000
+ENV NEXT_PUBLIC_ATLAS_BACKEND_URL=$NEXT_PUBLIC_ATLAS_BACKEND_URL
+
+# Copy dependencies
 COPY --from=deps /app/node_modules ./node_modules
 
-# Copy all source files
+# Copy source (safe because of .dockerignore)
 COPY . .
 
-# Build the production Next.js bundle.
-# Requires `output: 'standalone'` in next.config.ts (already configured).
+# Build Next.js standalone output
 RUN npm run build
 
-# ── Stage 3: Production runner ─────────────────────────────────────────────────
-FROM node:20-alpine AS runner
+# 🔒 Safety check — ensure standalone build exists
+RUN test -f .next/standalone/server.js || (echo "❌ Standalone build failed" && exit 1)
+
+
+# ── Stage 3: Production runner ─────────────────────────────────
+FROM node:20.11-slim AS runner
 
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_OPTIONS="--max-old-space-size=256"
 
-# Create a non-root user — security best practice
-RUN addgroup --system --gid 1001 nodejs \
- && adduser  --system --uid 1001 nextjs
+# Install tini (proper signal handling)
+RUN apt-get update && apt-get install -y tini \
+  && rm -rf /var/lib/apt/lists/*
 
-# Copy the self-contained Next.js server (no node_modules needed at runtime)
+# Create non-root user
+RUN groupadd --system --gid 1001 nodejs \
+ && useradd  --system --uid 1001 nextjs
+
+# Copy standalone server
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 
-# Copy static assets (CSS, JS chunks, images optimised by Next.js)
+# Copy static assets
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Copy the public directory (favicon, static files served verbatim)
-COPY --from=builder --chown=nextjs:nodejs /app/public ./public
-
+# Use non-root user
 USER nextjs
 
 EXPOSE 3000
@@ -84,9 +81,12 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-# Health-check: hits the Next.js root which always returns 200 or a redirect
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+# Healthcheck (basic but reliable)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
   CMD wget -qO- http://localhost:3000/ || exit 1
 
-# Start the standalone Next.js server
+# Proper container init
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# Start Next.js standalone server
 CMD ["node", "server.js"]
