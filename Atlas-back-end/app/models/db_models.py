@@ -357,6 +357,73 @@ class MitigationAuditLog(Base):
         Index("ix_mitigation_audit_jsonb",      "details", postgresql_using="gin"),
     )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# BlockedEntity — Kill Switch ledger (enforced by AtlasMiddleware)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class BlockedEntity(Base):
+    """
+    Persistent kill-switch ledger.
+
+    The AtlasMiddleware reads this table (via an in-process cache that refreshes
+    every 30 seconds) on every incoming request. If the request's source IP
+    matches a row with entity_type='ip', or the request path matches a row with
+    entity_type='route', the middleware returns 403 Forbidden immediately without
+    forwarding the request to any route handler.
+
+    entity_type values:
+        'ip'    — blocks a source IP address (e.g. "203.0.113.42")
+        'route' — blocks a URL path prefix  (e.g. "/api/v1/export")
+
+    Rows are inserted by the kill-switch endpoints in routes_actions.py.
+    Rows are soft-deleted (is_active=False) via POST /api-monitoring/unblock/{id}.
+    """
+    __tablename__ = "blocked_entities"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=True
+    )
+
+    # ── Classification ────────────────────────────────────────────────────────
+    env: Mapped[str] = mapped_column(
+        String(16), nullable=False, index=True, default="cloud"
+    )
+    entity_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, index=True
+        # "ip" | "route"
+    )
+
+    # The actual value being blocked.
+    # For entity_type='ip':    "203.0.113.42"
+    # For entity_type='route': "/api/v1/export"  (prefix-matched by middleware)
+    value: Mapped[str] = mapped_column(
+        String(512), nullable=False, index=True
+    )
+
+    # Human-readable reason, shown in the kill-switch UI.
+    reason: Mapped[str] = mapped_column(
+        Text, nullable=False, default=""
+    )
+
+    # Who triggered the block and when.
+    blocked_by: Mapped[str] = mapped_column(
+        String(256), nullable=False, default="system"
+    )
+    blocked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow_dt, index=True
+    )
+
+    # Soft-delete: set to False to stop enforcement without losing audit history.
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, index=True
+    )
+
+    __table_args__ = (
+        Index("ix_blocked_entities_env_type",   "env", "entity_type"),
+        Index("ix_blocked_entities_env_active",  "env", "is_active"),
+        # Prevents the same value being blocked twice in the same env.
+        Index("uq_blocked_entities_env_value",   "env", "value", unique=True),
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Application & Service Registry

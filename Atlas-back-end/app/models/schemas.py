@@ -326,3 +326,26 @@ class GenerateReportResponse(BaseModel):
     success: bool
     message: str
     download: Optional[RecentDownloadRow] = None
+
+# ── Kill Switch Response Schemas ──────────────────────────────────────────────
+
+class BlockedEntityResponse(BaseModel):
+    """Returned by POST /api-monitoring/block-route and POST /network-traffic/block."""
+    success: bool
+    message: str
+    entity_id: int | None = None
+
+
+class UnblockResponse(BaseModel):
+    """Returned by POST /api-monitoring/unblock/{entity_id}."""
+    success: bool
+    message: str
+
+
+class BlockedEntityListResponse(BaseModel):
+    """
+    Returned by GET /api-monitoring/blocked.
+    Each item in `entities` contains:
+        id, entityType, value, reason, blockedBy, blockedAt, isActive
+    """
+    entities: List[Dict[str, Any]]

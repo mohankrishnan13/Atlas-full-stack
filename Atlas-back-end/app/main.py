@@ -42,6 +42,7 @@ from app.api.routes_dashboard import router as dashboard_router
 from app.api.routes_settings import router as settings_router
 from app.api.routes_actions import router as actions_router
 from app.api.routes_simulation import router as simulation_router
+from app.middleware import AtlasMiddleware
 
 logging.basicConfig(
     level=logging.INFO,
@@ -168,34 +169,60 @@ async def _start_wazuh_sync() -> None:
 async def lifespan(app: FastAPI):
     logger.info("Starting %s (env: %s) ...", settings.app_name, settings.app_env)
 
-    # Seed initial data. The Dockerfile guarantees Alembic has already run,
-    # so tables exist here. The try/except below handles the manual-dev case.
+    # Seed initial data (tables guaranteed to exist because Dockerfile runs
+    # `alembic upgrade head` before uvicorn starts).
     try:
         await seed_default_admin()
-        await _seed_applications_config()
+        await _seed_applications_config()      # already defined in main.py
     except (ProgrammingError, OperationalError) as exc:
         logger.warning(
-            "Database seed skipped on startup (%s). "
-            "Run `alembic upgrade head` then restart.",
+            "Database seed skipped on startup (%s). Run `alembic upgrade head` then restart.",
             type(exc).__name__,
         )
 
-    wazuh_task  = asyncio.create_task(_start_wazuh_sync())
+    wazuh_task  = asyncio.create_task(_start_wazuh_sync())   # already in main.py
     engine_task = asyncio.create_task(anomaly_worker())
+
+    # ── Start AtlasMiddleware ApiLog buffer ───────────────────────────────────
+    # Walk the Starlette middleware stack to find the AtlasMiddleware instance
+    # and start its background ApiLog flush task inside the running event loop.
+    _atlas_mw = None
+    _stack = app.middleware_stack
+    while _stack is not None:
+        if isinstance(_stack, AtlasMiddleware):
+            _atlas_mw = _stack
+            break
+        _stack = getattr(_stack, "app", None)
+
+    if _atlas_mw:
+        await _atlas_mw.startup()
+        logger.info("[Lifespan] AtlasMiddleware ApiLog buffer started.")
+    else:
+        logger.warning(
+            "[Lifespan] AtlasMiddleware not found in stack — "
+            "ApiLog buffer will not flush automatically. "
+            "Did you register it with app.add_middleware(AtlasMiddleware)?"
+        )
+
     logger.info(
-        "%s startup complete. Wazuh sync + Anomaly Engine active.",
+        "%s startup complete. Wazuh sync + Anomaly Engine + ApiLog buffer active.",
         settings.app_name,
     )
 
-    yield
+    yield   # ← application runs here
 
     logger.info("Shutting down ATLAS ...")
+
+    if _atlas_mw:
+        await _atlas_mw.shutdown()
+
     for task in (wazuh_task, engine_task):
         task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
+        
     await close_db()
     logger.info("Shutdown complete.")
 
@@ -218,6 +245,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(AtlasMiddleware)
 
 app.include_router(auth_router)
 app.include_router(dashboard_router)
