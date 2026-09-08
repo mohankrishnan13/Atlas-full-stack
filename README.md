@@ -1,6 +1,6 @@
 # ATLAS — Advanced Traffic Layer Anomaly System
 
-Enterprise-grade Security Operations Centre (SOC) dashboard. **PostgreSQL + Velociraptor** replace Elasticsearch + Wazuh. Full-stack: FastAPI backend, Next.js 15 + React 19 frontend, all data from the API (no mock data).
+Enterprise-grade Security Operations Centre (SOC) dashboard. **PostgreSQL. Full-stack: FastAPI backend, Next.js 15 + React 19 frontend, all data from the API (no mock data).
 
 ---
 
